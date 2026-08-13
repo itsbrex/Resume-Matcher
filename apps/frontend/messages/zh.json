@@ -975,6 +975,14 @@
     }
   },
   "tracker": {
+    "manage": "管理",
+    "manageDialog": {
+      "title": "管理状态模块",
+      "description": "选择看板中显示的状态模块。",
+      "show": "显示",
+      "hide": "隐藏",
+      "close": "完成"
+    },
     "scroll": {
       "prev": "向左滚动",
       "next": "向右滚动",

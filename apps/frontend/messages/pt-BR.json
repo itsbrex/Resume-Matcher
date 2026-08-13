@@ -975,6 +975,14 @@
     }
   },
   "tracker": {
+    "manage": "Manage",
+    "manageDialog": {
+      "title": "Manage Columns",
+      "description": "Choose which stages appear on the board.",
+      "show": "Show",
+      "hide": "Hide",
+      "close": "Done"
+    },
     "scroll": {
       "prev": "Rolar para a esquerda",
       "next": "Rolar para a direita",

@@ -41,13 +41,23 @@ const nonContentResumeKeys = new Set([
   'key',
   'displayName',
 ]);
+const maxResumeContentRecursion = 10;
 
-const hasMeaningfulResumeValue = (value: unknown): boolean => {
+const hasMeaningfulResumeValue = (
+  value: unknown,
+  depth = 0,
+  filterStructuralKeys = true
+): boolean => {
+  if (depth >= maxResumeContentRecursion) return false;
   if (typeof value === 'string') return Boolean(value.trim());
-  if (Array.isArray(value)) return value.some(hasMeaningfulResumeValue);
+  if (Array.isArray(value)) {
+    return value.some((item) => hasMeaningfulResumeValue(item, depth + 1));
+  }
   if (!value || typeof value !== 'object') return false;
   return Object.entries(value as Record<string, unknown>).some(
-    ([key, item]) => !nonContentResumeKeys.has(key) && hasMeaningfulResumeValue(item)
+    ([key, item]) =>
+      (!filterStructuralKeys || !nonContentResumeKeys.has(key)) &&
+      hasMeaningfulResumeValue(item, depth + 1)
   );
 };
 
@@ -62,7 +72,7 @@ const hasMeaningfulResumeContent = (value: unknown): boolean => {
     'personalProjects',
     'additional',
     'customSections',
-  ].some((section) => hasMeaningfulResumeValue(resume[section]));
+  ].some((section) => hasMeaningfulResumeValue(resume[section], 0, section !== 'customSections'));
 };
 
 export default function DashboardPage() {

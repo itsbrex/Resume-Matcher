@@ -119,17 +119,34 @@ def restore_dates_from_markdown(
 _NON_CONTENT_RESUME_KEYS = frozenset(
     {"id", "sectionType", "descriptionStyles", "isDefault", "isVisible", "order", "key", "displayName"}
 )
+_MAX_RESUME_CONTENT_RECURSION = 10
 
 
-def _has_meaningful_resume_value(value: Any) -> bool:
-    """Return whether a value contains non-structural, user-visible text."""
+def _has_meaningful_resume_value(
+    value: Any,
+    *,
+    depth: int = 0,
+    filter_structural_keys: bool = True,
+) -> bool:
+    """Return whether a value contains non-structural, user-visible text.
+
+    Custom-section identifiers are dictionary keys rather than schema fields,
+    so their values are checked without filtering the identifier itself.  Once
+    inside a section, normal structural-key filtering resumes.
+    """
+    if depth >= _MAX_RESUME_CONTENT_RECURSION:
+        return False
     if isinstance(value, str):
         return bool(value.strip())
     if isinstance(value, list):
-        return any(_has_meaningful_resume_value(item) for item in value)
+        return any(
+            _has_meaningful_resume_value(item, depth=depth + 1)
+            for item in value
+        )
     if isinstance(value, dict):
         return any(
-            key not in _NON_CONTENT_RESUME_KEYS and _has_meaningful_resume_value(item)
+            (not filter_structural_keys or key not in _NON_CONTENT_RESUME_KEYS)
+            and _has_meaningful_resume_value(item, depth=depth + 1)
             for key, item in value.items()
         )
     return False
@@ -158,7 +175,10 @@ def has_meaningful_resume_content(resume_data: Any) -> bool:
         "customSections",
     )
     return any(
-        _has_meaningful_resume_value(resume_data.get(section))
+        _has_meaningful_resume_value(
+            resume_data.get(section),
+            filter_structural_keys=section != "customSections",
+        )
         for section in content_sections
     )
 

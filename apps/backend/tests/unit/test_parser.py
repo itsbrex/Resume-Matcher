@@ -137,6 +137,18 @@ class TestMeaningfulResumeContent:
             {"customSections": {"publications": {"sectionType": "text", "text": "Paper"}}}
         ) is True
 
+    def test_accepts_custom_section_with_a_reserved_identifier(self):
+        assert has_meaningful_resume_content(
+            {"customSections": {"key": {"sectionType": "text", "text": "Paper"}}}
+        ) is True
+
+    def test_rejects_content_beyond_the_recursion_limit(self):
+        deeply_nested: object = "Resume content"
+        for _ in range(11):
+            deeply_nested = {"value": deeply_nested}
+
+        assert has_meaningful_resume_content({"summary": deeply_nested}) is False
+
     @pytest.mark.asyncio
     @patch("app.services.parser.complete_json", new_callable=AsyncMock)
     async def test_parse_rejects_empty_llm_json(self, mock_complete_json):

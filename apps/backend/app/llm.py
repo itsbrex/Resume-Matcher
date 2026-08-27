@@ -250,11 +250,19 @@ def _openai_compatible_supports_json_mode(config: LLMConfig) -> bool:
     return _uses_opencode_zen_hy3(config) or host == "api.stepfun.com"
 
 
-def _extract_text_parts(value: Any, depth: int = 0, max_depth: int = 10) -> list[str]:
+def _extract_text_parts(
+    value: Any,
+    depth: int = 0,
+    max_depth: int = 10,
+    *,
+    exclude_reasoning: bool = False,
+) -> list[str]:
     """Recursively extract text segments from nested response structures.
 
     Handles strings, lists, dicts with 'text'/'content'/'value' keys, and objects
-    with text/content attributes. Limits recursion depth to avoid cycles.
+    with text/content attributes. Limits recursion depth to avoid cycles.  Set
+    ``exclude_reasoning`` for structured output, where typed reasoning blocks
+    must not be joined with a model's final answer.
 
     Args:
         value: Input value that may contain text in strings, lists, dicts, or objects.
@@ -277,64 +285,75 @@ def _extract_text_parts(value: Any, depth: int = 0, max_depth: int = 10) -> list
         parts: list[str] = []
         next_depth = depth + 1
         for item in value:
-            parts.extend(_extract_text_parts(item, next_depth, max_depth))
+            parts.extend(
+                _extract_text_parts(
+                    item,
+                    next_depth,
+                    max_depth,
+                    exclude_reasoning=exclude_reasoning,
+                )
+            )
         return parts
 
     if isinstance(value, dict):
+        block_type = value.get("type")
+        if (
+            exclude_reasoning
+            and isinstance(block_type, str)
+            and block_type.lower() in _REASONING_BLOCK_TYPES
+        ):
+            return []
         next_depth = depth + 1
         if "text" in value:
-            return _extract_text_parts(value.get("text"), next_depth, max_depth)
+            return _extract_text_parts(
+                value.get("text"),
+                next_depth,
+                max_depth,
+                exclude_reasoning=exclude_reasoning,
+            )
         if "content" in value:
-            return _extract_text_parts(value.get("content"), next_depth, max_depth)
+            return _extract_text_parts(
+                value.get("content"),
+                next_depth,
+                max_depth,
+                exclude_reasoning=exclude_reasoning,
+            )
         if "value" in value:
-            return _extract_text_parts(value.get("value"), next_depth, max_depth)
+            return _extract_text_parts(
+                value.get("value"),
+                next_depth,
+                max_depth,
+                exclude_reasoning=exclude_reasoning,
+            )
         return []
 
+    block_type = getattr(value, "type", None)
+    if (
+        exclude_reasoning
+        and isinstance(block_type, str)
+        and block_type.lower() in _REASONING_BLOCK_TYPES
+    ):
+        return []
     next_depth = depth + 1
     if hasattr(value, "text"):
-        return _extract_text_parts(getattr(value, "text"), next_depth, max_depth)
+        return _extract_text_parts(
+            getattr(value, "text"),
+            next_depth,
+            max_depth,
+            exclude_reasoning=exclude_reasoning,
+        )
     if hasattr(value, "content"):
-        return _extract_text_parts(getattr(value, "content"), next_depth, max_depth)
+        return _extract_text_parts(
+            getattr(value, "content"),
+            next_depth,
+            max_depth,
+            exclude_reasoning=exclude_reasoning,
+        )
 
     return []
 
 
 _REASONING_BLOCK_TYPES = frozenset({"analysis", "reasoning", "reasoning_content", "thinking"})
-
-
-def _extract_final_text_parts(value: Any, depth: int = 0, max_depth: int = 10) -> list[str]:
-    """Extract final-answer text while excluding typed reasoning blocks.
-
-    Some compatible APIs put both the hidden reasoning and the final answer in
-    ``message.content`` as a list of typed blocks. JSON parsing must not join a
-    reasoning block into the final answer in that representation.
-    """
-    if depth >= max_depth or value is None:
-        return []
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, list):
-        return [
-            text
-            for item in value
-            for text in _extract_final_text_parts(item, depth + 1, max_depth)
-        ]
-    if isinstance(value, dict):
-        block_type = value.get("type")
-        if isinstance(block_type, str) and block_type.lower() in _REASONING_BLOCK_TYPES:
-            return []
-        for key in ("text", "content", "value"):
-            if key in value:
-                return _extract_final_text_parts(value[key], depth + 1, max_depth)
-        return []
-
-    block_type = getattr(value, "type", None)
-    if isinstance(block_type, str) and block_type.lower() in _REASONING_BLOCK_TYPES:
-        return []
-    for attribute in ("text", "content", "value"):
-        if hasattr(value, attribute):
-            return _extract_final_text_parts(getattr(value, attribute), depth + 1, max_depth)
-    return []
 
 
 def _join_text_parts(parts: list[str]) -> str | None:
@@ -425,14 +444,18 @@ def _extract_choice_primary_text(choice: Any) -> str | None:
     respond.
     """
     message = _safe_get(choice, "message")
-    content = _join_text_parts(_extract_final_text_parts(_safe_get(message, "content")))
+    content = _join_text_parts(
+        _extract_text_parts(_safe_get(message, "content"), exclude_reasoning=True)
+    )
     if content:
         return content
 
     for field in ("text", "delta"):
         value = _safe_get(choice, field)
         if value is not None:
-            extracted = _join_text_parts(_extract_final_text_parts(value))
+            extracted = _join_text_parts(
+                _extract_text_parts(value, exclude_reasoning=True)
+            )
             if extracted:
                 return extracted
 

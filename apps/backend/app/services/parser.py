@@ -116,6 +116,25 @@ def restore_dates_from_markdown(
     return parsed_data
 
 
+_NON_CONTENT_RESUME_KEYS = frozenset(
+    {"id", "sectionType", "descriptionStyles", "isDefault", "isVisible", "order", "key", "displayName"}
+)
+
+
+def _has_meaningful_resume_value(value: Any) -> bool:
+    """Return whether a value contains non-structural, user-visible text."""
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, list):
+        return any(_has_meaningful_resume_value(item) for item in value)
+    if isinstance(value, dict):
+        return any(
+            key not in _NON_CONTENT_RESUME_KEYS and _has_meaningful_resume_value(item)
+            for key, item in value.items()
+        )
+    return False
+
+
 def has_meaningful_resume_content(resume_data: Any) -> bool:
     """Return whether parsed resume data contains any user-facing content.
 
@@ -129,30 +148,19 @@ def has_meaningful_resume_content(resume_data: Any) -> bool:
     if not isinstance(resume_data, dict):
         return False
 
-    personal_info = resume_data.get("personalInfo")
-    if isinstance(personal_info, dict) and any(
-        isinstance(value, str) and value.strip() for value in personal_info.values()
-    ):
-        return True
-
-    if isinstance(resume_data.get("summary"), str) and resume_data["summary"].strip():
-        return True
-
-    for section in ("workExperience", "education", "personalProjects"):
-        entries = resume_data.get(section)
-        if isinstance(entries, list) and any(isinstance(entry, dict) and entry for entry in entries):
-            return True
-
-    additional = resume_data.get("additional")
-    if isinstance(additional, dict):
-        for values in additional.values():
-            if isinstance(values, list) and any(
-                isinstance(value, str) and value.strip() for value in values
-            ):
-                return True
-
-    custom_sections = resume_data.get("customSections")
-    return isinstance(custom_sections, dict) and bool(custom_sections)
+    content_sections = (
+        "personalInfo",
+        "summary",
+        "workExperience",
+        "education",
+        "personalProjects",
+        "additional",
+        "customSections",
+    )
+    return any(
+        _has_meaningful_resume_value(resume_data.get(section))
+        for section in content_sections
+    )
 
 
 async def parse_document(content: bytes, filename: str) -> str:
@@ -206,7 +214,7 @@ async def parse_resume_to_json(markdown_text: str) -> dict[str, Any]:
     result = await complete_json(
         prompt=prompt,
         system_prompt="You are a JSON extraction engine. Output only valid JSON, no explanations.",
-        max_tokens=get_safe_max_tokens(model_name),
+        max_tokens=get_safe_max_tokens(model_name, config=config),
         retries=3,
     )
 

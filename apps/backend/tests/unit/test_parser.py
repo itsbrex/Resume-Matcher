@@ -107,9 +107,46 @@ class TestMeaningfulResumeContent:
             {"personalInfo": {}, "workExperience": [{"title": "Engineer"}]}
         ) is True
 
+    def test_rejects_default_only_section_entries(self):
+        assert has_meaningful_resume_content(
+            {
+                "workExperience": [
+                    {
+                        "id": 0,
+                        "title": "",
+                        "company": "",
+                        "years": "",
+                        "description": [],
+                        "descriptionStyles": [],
+                    }
+                ],
+                "customSections": {
+                    "empty": {
+                        "sectionType": "itemList",
+                        "items": [{"id": 0, "title": "", "description": []}],
+                    }
+                },
+            }
+        ) is False
+
+    def test_accepts_additional_and_custom_section_text(self):
+        assert has_meaningful_resume_content(
+            {"additional": {"technicalSkills": ["Python"]}}
+        ) is True
+        assert has_meaningful_resume_content(
+            {"customSections": {"publications": {"sectionType": "text", "text": "Paper"}}}
+        ) is True
+
     @pytest.mark.asyncio
     @patch("app.services.parser.complete_json", new_callable=AsyncMock)
     async def test_parse_rejects_empty_llm_json(self, mock_complete_json):
         mock_complete_json.return_value = {}
+        with pytest.raises(ValueError, match="empty structured resume"):
+            await parse_resume_to_json("Jane Doe")
+
+    @pytest.mark.asyncio
+    @patch("app.services.parser.complete_json", new_callable=AsyncMock)
+    async def test_parse_rejects_default_only_llm_entries(self, mock_complete_json):
+        mock_complete_json.return_value = {"workExperience": [{}]}
         with pytest.raises(ValueError, match="empty structured resume"):
             await parse_resume_to_json("Jane Doe")

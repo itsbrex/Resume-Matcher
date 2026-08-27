@@ -31,22 +31,38 @@ import { useStatusCache } from '@/lib/context/status-cache';
 
 type ProcessingStatus = 'pending' | 'processing' | 'ready' | 'failed' | 'loading';
 
+const nonContentResumeKeys = new Set([
+  'id',
+  'sectionType',
+  'descriptionStyles',
+  'isDefault',
+  'isVisible',
+  'order',
+  'key',
+  'displayName',
+]);
+
+const hasMeaningfulResumeValue = (value: unknown): boolean => {
+  if (typeof value === 'string') return Boolean(value.trim());
+  if (Array.isArray(value)) return value.some(hasMeaningfulResumeValue);
+  if (!value || typeof value !== 'object') return false;
+  return Object.entries(value as Record<string, unknown>).some(
+    ([key, item]) => !nonContentResumeKeys.has(key) && hasMeaningfulResumeValue(item)
+  );
+};
+
 const hasMeaningfulResumeContent = (value: unknown): boolean => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const resume = value as Record<string, unknown>;
-  const personalInfo = resume.personalInfo;
-  if (
-    personalInfo &&
-    typeof personalInfo === 'object' &&
-    !Array.isArray(personalInfo) &&
-    Object.values(personalInfo).some((field) => typeof field === 'string' && field.trim())
-  ) {
-    return true;
-  }
-  if (typeof resume.summary === 'string' && resume.summary.trim()) return true;
-  return ['workExperience', 'education', 'personalProjects'].some(
-    (section) => Array.isArray(resume[section]) && resume[section].length > 0
-  );
+  return [
+    'personalInfo',
+    'summary',
+    'workExperience',
+    'education',
+    'personalProjects',
+    'additional',
+    'customSections',
+  ].some((section) => hasMeaningfulResumeValue(resume[section]));
 };
 
 export default function DashboardPage() {

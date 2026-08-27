@@ -230,7 +230,24 @@ def _uses_opencode_zen_hy3(config: LLMConfig) -> bool:
     if not isinstance(config.api_base, str):
         return False
     parsed = urlsplit(config.api_base.strip())
-    return (parsed.hostname or "").lower() == "opencode.ai" and parsed.path.startswith("/zen/")
+    path = parsed.path.rstrip("/")
+    return (parsed.hostname or "").lower() == "opencode.ai" and (
+        path == "/zen" or path.startswith("/zen/")
+    )
+
+
+def _openai_compatible_supports_json_mode(config: LLMConfig) -> bool:
+    """Return whether a compatible endpoint is known to accept JSON mode.
+
+    Custom OpenAI-compatible servers have no uniform capability-discovery API.
+    Sending ``response_format`` to every one of them can turn a prompt-only
+    JSON request that previously worked into a 400. Keep this allowlist limited
+    to endpoints that have been verified to support OpenAI JSON mode.
+    """
+    if config.provider != "openai_compatible" or not isinstance(config.api_base, str):
+        return False
+    host = (urlsplit(config.api_base.strip()).hostname or "").lower()
+    return _uses_opencode_zen_hy3(config) or host == "api.stepfun.com"
 
 
 def _extract_text_parts(value: Any, depth: int = 0, max_depth: int = 10) -> list[str]:
@@ -279,6 +296,44 @@ def _extract_text_parts(value: Any, depth: int = 0, max_depth: int = 10) -> list
     if hasattr(value, "content"):
         return _extract_text_parts(getattr(value, "content"), next_depth, max_depth)
 
+    return []
+
+
+_REASONING_BLOCK_TYPES = frozenset({"analysis", "reasoning", "reasoning_content", "thinking"})
+
+
+def _extract_final_text_parts(value: Any, depth: int = 0, max_depth: int = 10) -> list[str]:
+    """Extract final-answer text while excluding typed reasoning blocks.
+
+    Some compatible APIs put both the hidden reasoning and the final answer in
+    ``message.content`` as a list of typed blocks. JSON parsing must not join a
+    reasoning block into the final answer in that representation.
+    """
+    if depth >= max_depth or value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [
+            text
+            for item in value
+            for text in _extract_final_text_parts(item, depth + 1, max_depth)
+        ]
+    if isinstance(value, dict):
+        block_type = value.get("type")
+        if isinstance(block_type, str) and block_type.lower() in _REASONING_BLOCK_TYPES:
+            return []
+        for key in ("text", "content", "value"):
+            if key in value:
+                return _extract_final_text_parts(value[key], depth + 1, max_depth)
+        return []
+
+    block_type = getattr(value, "type", None)
+    if isinstance(block_type, str) and block_type.lower() in _REASONING_BLOCK_TYPES:
+        return []
+    for attribute in ("text", "content", "value"):
+        if hasattr(value, attribute):
+            return _extract_final_text_parts(getattr(value, attribute), depth + 1, max_depth)
     return []
 
 
@@ -370,14 +425,14 @@ def _extract_choice_primary_text(choice: Any) -> str | None:
     respond.
     """
     message = _safe_get(choice, "message")
-    content = _join_text_parts(_extract_text_parts(_safe_get(message, "content")))
+    content = _join_text_parts(_extract_final_text_parts(_safe_get(message, "content")))
     if content:
         return content
 
     for field in ("text", "delta"):
         value = _safe_get(choice, field)
         if value is not None:
-            extracted = _join_text_parts(_extract_text_parts(value))
+            extracted = _join_text_parts(_extract_final_text_parts(value))
             if extracted:
                 return extracted
 
@@ -914,15 +969,13 @@ def _is_response_format_unsupported(error: Exception) -> bool:
     return any(cue in msg for cue in rejection_cues)
 
 
-# Unknown OpenAI-compatible models are common (self-hosted deployments and
-# aggregators do not appear in LiteLLM's registry).  A complete resume JSON
-# frequently needs more than 4096 tokens once a reasoning model has spent part
-# of the shared budget on thinking, so keep the documented 8192 default rather
-# than silently shrinking it.  Providers with a lower hard limit return a
-# clear validation error instead of a deceptively incomplete "success".
-FALLBACK_MAX_TOKENS = DEFAULT_JSON_MAX_TOKENS
+FALLBACK_MAX_TOKENS = 4096
 
-def get_safe_max_tokens(model_name: str, requested: int = DEFAULT_JSON_MAX_TOKENS) -> int:
+def get_safe_max_tokens(
+    model_name: str,
+    requested: int = DEFAULT_JSON_MAX_TOKENS,
+    config: LLMConfig | None = None,
+) -> int:
     """Return a token count safe for the given model, clamped to its output limit.
 
     Queries LiteLLM's model registry for ``max_output_tokens`` and returns
@@ -930,11 +983,14 @@ def get_safe_max_tokens(model_name: str, requested: int = DEFAULT_JSON_MAX_TOKEN
     what the backend actually supports.
 
     If the model is not in the registry (e.g. custom Ollama models), it falls
-    back to the structured-output default (FALLBACK_MAX_TOKENS).
+    back to a conservative limit. The verified OpenCode Zen HY3 route is an
+    exception because JSON extraction disables reasoning for that model and
+    needs the full structured-output budget.
 
     Args:
         model_name: LiteLLM-formatted model name (from get_model_name).
         requested: Desired token budget; defaults to DEFAULT_JSON_MAX_TOKENS.
+        config: Optional provider configuration for scoped compatibility rules.
 
     Returns:
         Safe token count, clamped correctly and always >= 1.
@@ -957,7 +1013,12 @@ def get_safe_max_tokens(model_name: str, requested: int = DEFAULT_JSON_MAX_TOKEN
     except Exception:
         pass  # Model not in registry, drop down to fallback logic
 
-    safe = min(safe_requested, FALLBACK_MAX_TOKENS)
+    fallback_limit = (
+        DEFAULT_JSON_MAX_TOKENS
+        if config is not None and _uses_opencode_zen_hy3(config)
+        else FALLBACK_MAX_TOKENS
+    )
+    safe = min(safe_requested, fallback_limit)
     logging.debug(
         "Model %s not in LiteLLM registry, using fallback max_tokens %d",
         model_name,
@@ -1265,12 +1326,10 @@ async def complete_json(
         {"role": "user", "content": prompt},
     ]
 
-    # Check if we can use JSON mode.  OpenAI-compatible endpoints are often
-    # custom models which LiteLLM does not know about, so the registry cannot
-    # reliably report their ``response_format`` capability.  Prefer JSON mode
-    # for those endpoints and retain the existing BadRequest fallback below for
-    # servers that reject it (for example older local servers).
-    use_json_mode = _supports_json_mode(model_name) or config.provider == "openai_compatible"
+    # Unknown compatible servers may reject response_format. Use JSON mode
+    # when LiteLLM advertises it or when the endpoint is explicitly known to
+    # support it; prompt-only JSON remains the portable default.
+    use_json_mode = _supports_json_mode(model_name) or _openai_compatible_supports_json_mode(config)
     json_mode_failed = False
 
     for attempt in range(retries + 1):

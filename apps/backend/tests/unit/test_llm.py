@@ -10,8 +10,10 @@ from app.llm import (
     _azure_foundry_api_version,
     _get_retry_temperature,
     _normalize_api_base,
+    _openai_compatible_supports_json_mode,
     _supports_temperature,
     _uses_opencode_zen_hy3,
+    get_safe_max_tokens,
     get_model_name,
     resolve_api_key,
 )
@@ -134,6 +136,30 @@ class TestProviderConfiguration:
                 api_base="https://example.com/v1",
             )
         )
+
+    def test_recognizes_opencode_zen_without_a_trailing_path_segment(self):
+        config = LLMConfig(
+            provider="openai_compatible",
+            model="hy3-free",
+            api_key="",
+            api_base="https://opencode.ai/zen",
+        )
+        assert _uses_opencode_zen_hy3(config)
+        assert _openai_compatible_supports_json_mode(config)
+
+    @patch("app.llm.litellm.get_model_info", side_effect=Exception("unknown model"))
+    def test_unknown_models_keep_conservative_token_fallback(self, _mock_model_info):
+        assert get_safe_max_tokens("openai/custom-model") == 4096
+
+    @patch("app.llm.litellm.get_model_info", side_effect=Exception("unknown model"))
+    def test_opencode_hy3_gets_full_json_budget_when_unknown(self, _mock_model_info):
+        config = LLMConfig(
+            provider="openai_compatible",
+            model="hy3-free",
+            api_key="",
+            api_base="https://opencode.ai/zen/v1",
+        )
+        assert get_safe_max_tokens("openai/hy3-free", config=config) == 8192
 
 
 # ---------------------------------------------------------------------------
@@ -382,12 +408,12 @@ class TestCompleteJsonFallback:
     @patch("app.llm.get_router")
     @patch("app.llm.get_model_name")
     @patch("app.llm._supports_json_mode")
-    async def test_openai_compatible_uses_json_mode_for_unknown_model(
+    async def test_known_compatible_endpoint_uses_json_mode(
         self, mock_supports_json, mock_get_name, mock_get_router
     ):
-        """Custom compatible models should not depend on LiteLLM's registry."""
+        """Verified compatible endpoints can opt into JSON mode."""
         mock_supports_json.return_value = False
-        mock_get_name.return_value = "openai/custom-compatible-model"
+        mock_get_name.return_value = "openai/hy3-free"
 
         choice = MagicMock()
         choice.message.content = '{"required_skills": ["Python"]}'
@@ -395,9 +421,12 @@ class TestCompleteJsonFallback:
         response.choices = [choice]
         router = MagicMock()
         router.acompletion = AsyncMock(return_value=response)
-        config = MagicMock()
-        config.provider = "openai_compatible"
-        config.reasoning_effort = None
+        config = LLMConfig(
+            provider="openai_compatible",
+            model="hy3-free",
+            api_key="",
+            api_base="https://opencode.ai/zen/v1",
+        )
         mock_get_router.return_value = (router, config)
 
         from app.llm import complete_json
@@ -420,7 +449,7 @@ class TestCompleteJsonFallback:
 
         reasoning_only = MagicMock()
         reasoning_only.message.content = None
-        reasoning_only.message.reasoning_content = "I should construct JSON next."
+        reasoning_only.message.reasoning_content = '{"required_skills": ["incorrect"]}'
         completed = MagicMock()
         completed.message.content = '{"required_skills": ["Python"]}'
         router = MagicMock()
@@ -441,6 +470,36 @@ class TestCompleteJsonFallback:
 
         assert result == {"required_skills": ["Python"]}
         assert router.acompletion.await_count == 2
+
+    @pytest.mark.asyncio
+    @patch("app.llm.get_router")
+    @patch("app.llm.get_model_name")
+    @patch("app.llm._supports_json_mode")
+    async def test_typed_reasoning_block_is_excluded_from_final_json(
+        self, mock_supports_json, mock_get_name, mock_get_router
+    ):
+        mock_supports_json.return_value = False
+        mock_get_name.return_value = "openai/hy3-free"
+        choice = MagicMock()
+        choice.message.content = [
+            {"type": "reasoning", "text": '{"required_skills": ["incorrect"]}'},
+            {"type": "output_text", "text": '{"required_skills": ["Python"]}'},
+        ]
+        router = MagicMock()
+        router.acompletion = AsyncMock(return_value=MagicMock(choices=[choice]))
+        config = LLMConfig(
+            provider="openai_compatible",
+            model="hy3-free",
+            api_key="",
+            api_base="https://opencode.ai/zen/v1",
+        )
+        mock_get_router.return_value = (router, config)
+
+        from app.llm import complete_json
+
+        result = await complete_json("Extract keywords", schema_type="keywords")
+
+        assert result == {"required_skills": ["Python"]}
 
     @pytest.mark.asyncio
     @patch("app.llm.get_router")

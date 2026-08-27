@@ -31,6 +31,24 @@ import { useStatusCache } from '@/lib/context/status-cache';
 
 type ProcessingStatus = 'pending' | 'processing' | 'ready' | 'failed' | 'loading';
 
+const hasMeaningfulResumeContent = (value: unknown): boolean => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const resume = value as Record<string, unknown>;
+  const personalInfo = resume.personalInfo;
+  if (
+    personalInfo &&
+    typeof personalInfo === 'object' &&
+    !Array.isArray(personalInfo) &&
+    Object.values(personalInfo).some((field) => typeof field === 'string' && field.trim())
+  ) {
+    return true;
+  }
+  if (typeof resume.summary === 'string' && resume.summary.trim()) return true;
+  return ['workExperience', 'education', 'personalProjects'].some(
+    (section) => Array.isArray(resume[section]) && resume[section].length > 0
+  );
+};
+
 export default function DashboardPage() {
   const { t, locale } = useTranslations();
   const [masterResumeId, setMasterResumeId] = useState<string | null>(null);
@@ -80,7 +98,13 @@ export default function DashboardPage() {
     try {
       setProcessingStatus('loading');
       const data = await fetchResume(resumeId);
-      const status = data.raw_resume?.processing_status || 'pending';
+      const savedStatus = data.raw_resume?.processing_status || 'pending';
+      // Older backend versions accepted `{}` as a valid ResumeData object.
+      // Surface that legacy state as failed so users can retry it safely.
+      const status =
+        savedStatus === 'ready' && !hasMeaningfulResumeContent(data.processed_resume)
+          ? 'failed'
+          : savedStatus;
       setProcessingStatus(status as ProcessingStatus);
     } catch (err: unknown) {
       console.error('Failed to check resume status:', err);

@@ -6,7 +6,15 @@ markdown. This is pure, deterministic logic — the parser module was at ~20%
 coverage with none of it exercised.
 """
 
-from app.services.parser import _extract_markdown_dates, restore_dates_from_markdown
+import pytest
+from unittest.mock import AsyncMock, patch
+
+from app.services.parser import (
+    _extract_markdown_dates,
+    has_meaningful_resume_content,
+    parse_resume_to_json,
+    restore_dates_from_markdown,
+)
 
 
 class TestExtractMarkdownDates:
@@ -78,3 +86,30 @@ class TestRestoreDatesFromMarkdown:
         markdown = "Jun 2020 - Aug 2021"
         result = restore_dates_from_markdown(parsed, markdown)
         assert result["workExperience"][1]["years"] == "Jun 2020 - Aug 2021"
+
+
+class TestMeaningfulResumeContent:
+    def test_rejects_schema_defaults_only(self):
+        assert has_meaningful_resume_content(
+            {
+                "personalInfo": {},
+                "summary": "",
+                "workExperience": [],
+                "education": [],
+                "personalProjects": [],
+                "additional": {"technicalSkills": []},
+                "customSections": {},
+            }
+        ) is False
+
+    def test_accepts_experience_without_contact_details(self):
+        assert has_meaningful_resume_content(
+            {"personalInfo": {}, "workExperience": [{"title": "Engineer"}]}
+        ) is True
+
+    @pytest.mark.asyncio
+    @patch("app.services.parser.complete_json", new_callable=AsyncMock)
+    async def test_parse_rejects_empty_llm_json(self, mock_complete_json):
+        mock_complete_json.return_value = {}
+        with pytest.raises(ValueError, match="empty structured resume"):
+            await parse_resume_to_json("Jane Doe")

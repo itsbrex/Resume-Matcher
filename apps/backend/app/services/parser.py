@@ -116,6 +116,45 @@ def restore_dates_from_markdown(
     return parsed_data
 
 
+def has_meaningful_resume_content(resume_data: Any) -> bool:
+    """Return whether parsed resume data contains any user-facing content.
+
+    ``ResumeData`` intentionally defaults most fields to empty strings/lists.
+    That is useful for the builder, but it also means an LLM response such as
+    ``{}`` validates successfully.  Treating that response as a parsed resume
+    produces a blank PDF and makes every downstream tailoring request operate
+    on empty data.
+    """
+
+    if not isinstance(resume_data, dict):
+        return False
+
+    personal_info = resume_data.get("personalInfo")
+    if isinstance(personal_info, dict) and any(
+        isinstance(value, str) and value.strip() for value in personal_info.values()
+    ):
+        return True
+
+    if isinstance(resume_data.get("summary"), str) and resume_data["summary"].strip():
+        return True
+
+    for section in ("workExperience", "education", "personalProjects"):
+        entries = resume_data.get(section)
+        if isinstance(entries, list) and any(isinstance(entry, dict) and entry for entry in entries):
+            return True
+
+    additional = resume_data.get("additional")
+    if isinstance(additional, dict):
+        for values in additional.values():
+            if isinstance(values, list) and any(
+                isinstance(value, str) and value.strip() for value in values
+            ):
+                return True
+
+    custom_sections = resume_data.get("customSections")
+    return isinstance(custom_sections, dict) and bool(custom_sections)
+
+
 async def parse_document(content: bytes, filename: str) -> str:
     """Convert PDF/DOCX to Markdown using markitdown.
 
@@ -176,4 +215,7 @@ async def parse_resume_to_json(markdown_text: str) -> dict[str, Any]:
 
     # Validate against schema
     validated = ResumeData.model_validate(result)
-    return validated.model_dump()
+    parsed_data = validated.model_dump()
+    if not has_meaningful_resume_content(parsed_data):
+        raise ValueError("LLM returned an empty structured resume.")
+    return parsed_data

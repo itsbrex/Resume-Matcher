@@ -309,6 +309,21 @@ class TestRetryProcessing:
             resp = await client.post("/api/v1/resumes/res-123/retry-processing")
         assert resp.status_code == 400
 
+    @patch("app.routers.resumes.parse_resume_to_json", new_callable=AsyncMock)
+    @patch("app.routers.resumes.db", new_callable=AsyncMock)
+    async def test_retry_empty_legacy_ready_resume(self, mock_db, mock_parse, client, mock_resume_record, sample_resume):
+        empty_ready_record = {
+            **mock_resume_record,
+            "processing_status": "ready",
+            "processed_data": {},
+        }
+        mock_db.get_resume.return_value = empty_ready_record
+        mock_parse.return_value = sample_resume
+        async with client:
+            resp = await client.post("/api/v1/resumes/res-123/retry-processing")
+        assert resp.status_code == 200
+        mock_parse.assert_awaited_once_with(empty_ready_record["content"])
+
 
 class TestUploadResume:
     """POST /api/v1/resumes/upload"""

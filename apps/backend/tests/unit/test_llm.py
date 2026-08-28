@@ -1,5 +1,6 @@
 """Unit tests for LLM capability helpers in app.llm."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -8,6 +9,7 @@ from app.llm import (
     LLMConfig,
     _appears_truncated,
     _azure_foundry_api_version,
+    _extract_choice_primary_text,
     _get_retry_temperature,
     _normalize_api_base,
     _openai_compatible_supports_json_mode,
@@ -160,6 +162,21 @@ class TestProviderConfiguration:
             api_base="https://opencode.ai/zen/v1",
         )
         assert get_safe_max_tokens("openai/hy3-free", config=config) == 8192
+
+
+def test_primary_text_reads_typed_block_value_attribute():
+    choice = SimpleNamespace(
+        message=SimpleNamespace(
+            content=[
+                SimpleNamespace(
+                    type="output_text",
+                    value='{"required_skills": ["Python"]}',
+                )
+            ]
+        )
+    )
+
+    assert _extract_choice_primary_text(choice) == '{"required_skills": ["Python"]}'
 
 
 # ---------------------------------------------------------------------------

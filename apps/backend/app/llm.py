@@ -349,6 +349,13 @@ def _extract_text_parts(
             max_depth,
             exclude_reasoning=exclude_reasoning,
         )
+    if hasattr(value, "value"):
+        return _extract_text_parts(
+            getattr(value, "value"),
+            next_depth,
+            max_depth,
+            exclude_reasoning=exclude_reasoning,
+        )
 
     return []
 

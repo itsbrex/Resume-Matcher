@@ -357,7 +357,15 @@ class TestRetryProcessing:
             resp = await client.post("/api/v1/resumes/res-123/retry-processing")
 
         assert resp.status_code == 200
+        assert resp.json()["processing_status"] == "ready"
         mock_parse.assert_awaited_once_with(legacy_default_record["content"])
+        mock_db.update_resume.assert_awaited_once_with(
+            "res-123",
+            {
+                "processed_data": sample_resume,
+                "processing_status": "ready",
+            },
+        )
 
 
 class TestUploadResume:

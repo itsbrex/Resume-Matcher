@@ -116,6 +116,73 @@ def restore_dates_from_markdown(
     return parsed_data
 
 
+_NON_CONTENT_RESUME_KEYS = frozenset(
+    {"id", "sectionType", "descriptionStyles", "isDefault", "isVisible", "order", "key", "displayName"}
+)
+_MAX_RESUME_CONTENT_RECURSION = 10
+
+
+def _has_meaningful_resume_value(
+    value: Any,
+    *,
+    depth: int = 0,
+    filter_structural_keys: bool = True,
+) -> bool:
+    """Return whether a value contains non-structural, user-visible text.
+
+    Custom-section identifiers are dictionary keys rather than schema fields,
+    so their values are checked without filtering the identifier itself.  Once
+    inside a section, normal structural-key filtering resumes.
+    """
+    if depth >= _MAX_RESUME_CONTENT_RECURSION:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, list):
+        return any(
+            _has_meaningful_resume_value(item, depth=depth + 1)
+            for item in value
+        )
+    if isinstance(value, dict):
+        return any(
+            (not filter_structural_keys or key not in _NON_CONTENT_RESUME_KEYS)
+            and _has_meaningful_resume_value(item, depth=depth + 1)
+            for key, item in value.items()
+        )
+    return False
+
+
+def has_meaningful_resume_content(resume_data: Any) -> bool:
+    """Return whether parsed resume data contains any user-facing content.
+
+    ``ResumeData`` intentionally defaults most fields to empty strings/lists.
+    That is useful for the builder, but it also means an LLM response such as
+    ``{}`` validates successfully.  Treating that response as a parsed resume
+    produces a blank PDF and makes every downstream tailoring request operate
+    on empty data.
+    """
+
+    if not isinstance(resume_data, dict):
+        return False
+
+    content_sections = (
+        "personalInfo",
+        "summary",
+        "workExperience",
+        "education",
+        "personalProjects",
+        "additional",
+        "customSections",
+    )
+    return any(
+        _has_meaningful_resume_value(
+            resume_data.get(section),
+            filter_structural_keys=section != "customSections",
+        )
+        for section in content_sections
+    )
+
+
 async def parse_document(content: bytes, filename: str) -> str:
     """Convert PDF/DOCX to Markdown using markitdown.
 
@@ -167,7 +234,7 @@ async def parse_resume_to_json(markdown_text: str) -> dict[str, Any]:
     result = await complete_json(
         prompt=prompt,
         system_prompt="You are a JSON extraction engine. Output only valid JSON, no explanations.",
-        max_tokens=get_safe_max_tokens(model_name),
+        max_tokens=get_safe_max_tokens(model_name, config=config),
         retries=3,
     )
 
@@ -176,4 +243,7 @@ async def parse_resume_to_json(markdown_text: str) -> dict[str, Any]:
 
     # Validate against schema
     validated = ResumeData.model_validate(result)
-    return validated.model_dump()
+    parsed_data = validated.model_dump()
+    if not has_meaningful_resume_content(parsed_data):
+        raise ValueError("LLM returned an empty structured resume.")
+    return parsed_data

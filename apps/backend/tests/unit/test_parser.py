@@ -6,7 +6,15 @@ markdown. This is pure, deterministic logic — the parser module was at ~20%
 coverage with none of it exercised.
 """
 
-from app.services.parser import _extract_markdown_dates, restore_dates_from_markdown
+import pytest
+from unittest.mock import AsyncMock, patch
+
+from app.services.parser import (
+    _extract_markdown_dates,
+    has_meaningful_resume_content,
+    parse_resume_to_json,
+    restore_dates_from_markdown,
+)
 
 
 class TestExtractMarkdownDates:
@@ -78,3 +86,79 @@ class TestRestoreDatesFromMarkdown:
         markdown = "Jun 2020 - Aug 2021"
         result = restore_dates_from_markdown(parsed, markdown)
         assert result["workExperience"][1]["years"] == "Jun 2020 - Aug 2021"
+
+
+class TestMeaningfulResumeContent:
+    def test_rejects_schema_defaults_only(self):
+        assert has_meaningful_resume_content(
+            {
+                "personalInfo": {},
+                "summary": "",
+                "workExperience": [],
+                "education": [],
+                "personalProjects": [],
+                "additional": {"technicalSkills": []},
+                "customSections": {},
+            }
+        ) is False
+
+    def test_accepts_experience_without_contact_details(self):
+        assert has_meaningful_resume_content(
+            {"personalInfo": {}, "workExperience": [{"title": "Engineer"}]}
+        ) is True
+
+    def test_rejects_default_only_section_entries(self):
+        assert has_meaningful_resume_content(
+            {
+                "workExperience": [
+                    {
+                        "id": 0,
+                        "title": "",
+                        "company": "",
+                        "years": "",
+                        "description": [],
+                        "descriptionStyles": [],
+                    }
+                ],
+                "customSections": {
+                    "empty": {
+                        "sectionType": "itemList",
+                        "items": [{"id": 0, "title": "", "description": []}],
+                    }
+                },
+            }
+        ) is False
+
+    def test_accepts_additional_and_custom_section_text(self):
+        assert has_meaningful_resume_content(
+            {"additional": {"technicalSkills": ["Python"]}}
+        ) is True
+        assert has_meaningful_resume_content(
+            {"customSections": {"publications": {"sectionType": "text", "text": "Paper"}}}
+        ) is True
+
+    def test_accepts_custom_section_with_a_reserved_identifier(self):
+        assert has_meaningful_resume_content(
+            {"customSections": {"key": {"sectionType": "text", "text": "Paper"}}}
+        ) is True
+
+    def test_rejects_content_beyond_the_recursion_limit(self):
+        deeply_nested: object = "Resume content"
+        for _ in range(11):
+            deeply_nested = {"value": deeply_nested}
+
+        assert has_meaningful_resume_content({"summary": deeply_nested}) is False
+
+    @pytest.mark.asyncio
+    @patch("app.services.parser.complete_json", new_callable=AsyncMock)
+    async def test_parse_rejects_empty_llm_json(self, mock_complete_json):
+        mock_complete_json.return_value = {}
+        with pytest.raises(ValueError, match="empty structured resume"):
+            await parse_resume_to_json("Jane Doe")
+
+    @pytest.mark.asyncio
+    @patch("app.services.parser.complete_json", new_callable=AsyncMock)
+    async def test_parse_rejects_default_only_llm_entries(self, mock_complete_json):
+        mock_complete_json.return_value = {"workExperience": [{}]}
+        with pytest.raises(ValueError, match="empty structured resume"):
+            await parse_resume_to_json("Jane Doe")

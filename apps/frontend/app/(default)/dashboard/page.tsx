@@ -31,6 +31,50 @@ import { useStatusCache } from '@/lib/context/status-cache';
 
 type ProcessingStatus = 'pending' | 'processing' | 'ready' | 'failed' | 'loading';
 
+const nonContentResumeKeys = new Set([
+  'id',
+  'sectionType',
+  'descriptionStyles',
+  'isDefault',
+  'isVisible',
+  'order',
+  'key',
+  'displayName',
+]);
+const maxResumeContentRecursion = 10;
+
+const hasMeaningfulResumeValue = (
+  value: unknown,
+  depth = 0,
+  filterStructuralKeys = true
+): boolean => {
+  if (depth >= maxResumeContentRecursion) return false;
+  if (typeof value === 'string') return Boolean(value.trim());
+  if (Array.isArray(value)) {
+    return value.some((item) => hasMeaningfulResumeValue(item, depth + 1));
+  }
+  if (!value || typeof value !== 'object') return false;
+  return Object.entries(value as Record<string, unknown>).some(
+    ([key, item]) =>
+      (!filterStructuralKeys || !nonContentResumeKeys.has(key)) &&
+      hasMeaningfulResumeValue(item, depth + 1)
+  );
+};
+
+const hasMeaningfulResumeContent = (value: unknown): boolean => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const resume = value as Record<string, unknown>;
+  return [
+    'personalInfo',
+    'summary',
+    'workExperience',
+    'education',
+    'personalProjects',
+    'additional',
+    'customSections',
+  ].some((section) => hasMeaningfulResumeValue(resume[section], 0, section !== 'customSections'));
+};
+
 export default function DashboardPage() {
   const { t, locale } = useTranslations();
   const [masterResumeId, setMasterResumeId] = useState<string | null>(null);
@@ -80,7 +124,13 @@ export default function DashboardPage() {
     try {
       setProcessingStatus('loading');
       const data = await fetchResume(resumeId);
-      const status = data.raw_resume?.processing_status || 'pending';
+      const savedStatus = data.raw_resume?.processing_status || 'pending';
+      // Older backend versions accepted `{}` as a valid ResumeData object.
+      // Surface that legacy state as failed so users can retry it safely.
+      const status =
+        savedStatus === 'ready' && !hasMeaningfulResumeContent(data.processed_resume)
+          ? 'failed'
+          : savedStatus;
       setProcessingStatus(status as ProcessingStatus);
     } catch (err: unknown) {
       console.error('Failed to check resume status:', err);

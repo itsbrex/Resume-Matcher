@@ -309,6 +309,64 @@ class TestRetryProcessing:
             resp = await client.post("/api/v1/resumes/res-123/retry-processing")
         assert resp.status_code == 400
 
+    @patch("app.routers.resumes.parse_resume_to_json", new_callable=AsyncMock)
+    @patch("app.routers.resumes.db", new_callable=AsyncMock)
+    async def test_retry_empty_legacy_ready_resume(self, mock_db, mock_parse, client, mock_resume_record, sample_resume):
+        empty_ready_record = {
+            **mock_resume_record,
+            "processing_status": "ready",
+            "processed_data": {},
+        }
+        mock_db.get_resume.return_value = empty_ready_record
+        mock_parse.return_value = sample_resume
+        async with client:
+            resp = await client.post("/api/v1/resumes/res-123/retry-processing")
+        assert resp.status_code == 200
+        mock_parse.assert_awaited_once_with(empty_ready_record["content"])
+
+    @patch("app.routers.resumes.parse_resume_to_json", new_callable=AsyncMock)
+    @patch("app.routers.resumes.db", new_callable=AsyncMock)
+    async def test_retry_legacy_ready_resume_with_schema_defaults(
+        self, mock_db, mock_parse, client, mock_resume_record, sample_resume
+    ):
+        legacy_default_record = {
+            **mock_resume_record,
+            "processing_status": "ready",
+            "processed_data": {
+                "workExperience": [
+                    {
+                        "id": 0,
+                        "title": "",
+                        "company": "",
+                        "description": [],
+                        "descriptionStyles": [],
+                    }
+                ],
+                "customSections": {
+                    "empty": {
+                        "sectionType": "itemList",
+                        "items": [{"id": 0, "title": "", "description": []}],
+                    }
+                },
+            },
+        }
+        mock_db.get_resume.return_value = legacy_default_record
+        mock_parse.return_value = sample_resume
+
+        async with client:
+            resp = await client.post("/api/v1/resumes/res-123/retry-processing")
+
+        assert resp.status_code == 200
+        assert resp.json()["processing_status"] == "ready"
+        mock_parse.assert_awaited_once_with(legacy_default_record["content"])
+        mock_db.update_resume.assert_awaited_once_with(
+            "res-123",
+            {
+                "processed_data": sample_resume,
+                "processing_status": "ready",
+            },
+        )
+
 
 class TestUploadResume:
     """POST /api/v1/resumes/upload"""

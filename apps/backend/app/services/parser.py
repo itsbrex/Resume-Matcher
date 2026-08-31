@@ -119,6 +119,22 @@ def restore_dates_from_markdown(
 _NON_CONTENT_RESUME_KEYS = frozenset(
     {"id", "sectionType", "descriptionStyles", "isDefault", "isVisible", "order", "key", "displayName"}
 )
+# Depth guard against self-referential or pathological LLM output.  Recursion
+# starts at depth 0 on a *top-level section value*, so the deepest user-visible
+# value the real ``ResumeData`` schema can produce sits at depth 5:
+#
+#   customSections(0) -> CustomSection(1) -> items(2) -> CustomSectionItem(3)
+#       -> description(4) -> bullet string(5)
+#
+# Every other content section is shallower: workExperience / personalProjects
+# bottom out at depth 3 (list -> Experience -> description -> bullet),
+# education and additional at depth 2, personalInfo at depth 1, summary at
+# depth 0.  Values are still inspected at depth 9 (the cut-off is ``>= 10``),
+# so the limit leaves four full levels of headroom over the schema maximum.
+# Nothing that validates as ``ResumeData`` can be misjudged empty here;
+# anything deeper is malformed LLM output rather than a resume.  Raise this
+# only if the schema itself grows deeper -- see the boundary tests in
+# tests/unit/test_parser.py::TestMeaningfulResumeContent.
 _MAX_RESUME_CONTENT_RECURSION = 10
 
 

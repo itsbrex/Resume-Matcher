@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.llm import (
+    JSON_MODE_VERIFIED_HOSTS,
+    OPENCODE_ZEN_HY3_MODELS,
     LLMConfig,
     _appears_truncated,
     _azure_foundry_api_version,
@@ -892,3 +894,156 @@ class TestScrubSecrets:
         assert "sk-abcd1234efgh5678" not in _scrub_secrets("key sk-abcd1234efgh5678 failed")
         assert "AIzaSyABCDEFGHIJ" not in _scrub_secrets("key AIzaSyABCDEFGHIJ failed")
         assert "tok_secret" not in _scrub_secrets("Authorization: Bearer tok_secret")
+
+
+# ---------------------------------------------------------------------------
+# OpenAI-compatible endpoint allowlists
+# ---------------------------------------------------------------------------
+
+
+def _compatible(model: str = "hy3-free", api_base: str | None = "https://opencode.ai/zen/v1"):
+    """Build an ``openai_compatible`` config for allowlist assertions."""
+    return LLMConfig(
+        provider="openai_compatible",
+        model=model,
+        api_key="",
+        api_base=api_base,
+    )
+
+
+class TestOpenCodeZenHy3Route:
+    """The Zen HY3 route must match its gateway exactly and nothing else."""
+
+    @pytest.mark.parametrize("model", sorted(OPENCODE_ZEN_HY3_MODELS))
+    def test_every_allowlisted_model_matches(self, model):
+        assert _uses_opencode_zen_hy3(_compatible(model=model))
+
+    @pytest.mark.parametrize("model", ["HY3-Free", "  hy3  ", "Hy3"])
+    def test_model_matching_ignores_case_and_surrounding_space(self, model):
+        assert _uses_opencode_zen_hy3(_compatible(model=model))
+
+    @pytest.mark.parametrize(
+        "api_base",
+        [
+            "https://opencode.ai/zen",
+            "https://opencode.ai/zen/",
+            "https://opencode.ai/zen/v1",
+            "https://opencode.ai/zen/v1/",
+            "  https://opencode.ai/zen/v1  ",
+            "https://OpenCode.AI/zen/v1",
+        ],
+    )
+    def test_gateway_path_forms_match(self, api_base):
+        assert _uses_opencode_zen_hy3(_compatible(api_base=api_base))
+
+    def test_bare_zen_path_without_trailing_segment_matches(self):
+        """Regression: ``/zen`` with no trailing segment is the Zen gateway.
+
+        A review note claimed this form was mishandled. ``path.rstrip("/")``
+        normalises ``/zen`` and ``/zen/`` to ``/zen``, which the equality arm
+        accepts, so both the HY3 workaround and JSON mode engage.
+        """
+        config = _compatible(api_base="https://opencode.ai/zen")
+        assert _uses_opencode_zen_hy3(config)
+        assert _openai_compatible_supports_json_mode(config)
+
+    @pytest.mark.parametrize(
+        "api_base",
+        [
+            "https://evil-opencode.ai/zen/v1",  # lookalike registrable domain
+            "https://opencode.ai.evil.com/zen/v1",  # host as a left-hand label
+            "https://zen.opencode.ai/zen/v1",  # subdomain, not the exact host
+            "https://opencode.ai/zenith/v1",  # prefixed but different path
+            "https://opencode.ai/v1",  # right host, not the Zen gateway
+            "https://opencode.ai",  # right host, no path at all
+            "https://example.com/zen/v1",  # unrelated host
+        ],
+    )
+    def test_lookalike_hosts_and_paths_do_not_match(self, api_base):
+        config = _compatible(api_base=api_base)
+        assert not _uses_opencode_zen_hy3(config)
+        assert not _openai_compatible_supports_json_mode(config)
+
+    @pytest.mark.parametrize("model", ["gpt-4o", "hy3-turbo", "qwen2.5"])
+    def test_other_models_on_the_zen_gateway_do_not_match(self, model):
+        config = _compatible(model=model)
+        assert not _uses_opencode_zen_hy3(config)
+        # opencode.ai is not itself a JSON-mode-verified host: only the HY3
+        # route on it is allowlisted.
+        assert not _openai_compatible_supports_json_mode(config)
+
+    def test_other_providers_never_match(self):
+        assert not _uses_opencode_zen_hy3(
+            LLMConfig(
+                provider="openai",
+                model="hy3-free",
+                api_key="k",
+                api_base="https://opencode.ai/zen/v1",
+            )
+        )
+
+    def test_missing_api_base_does_not_match(self):
+        assert not _uses_opencode_zen_hy3(_compatible(api_base=None))
+
+    def test_route_reads_the_model_allowlist_constant(self):
+        """Matching must come from the constant, not an inlined literal."""
+        with patch("app.llm.OPENCODE_ZEN_HY3_MODELS", frozenset({"hy4"})):
+            assert not _uses_opencode_zen_hy3(_compatible(model="hy3-free"))
+            assert _uses_opencode_zen_hy3(_compatible(model="hy4"))
+
+    def test_route_reads_the_host_constant(self):
+        with patch("app.llm.OPENCODE_ZEN_HOST", "zen.example.com"):
+            assert not _uses_opencode_zen_hy3(_compatible())
+            assert _uses_opencode_zen_hy3(
+                _compatible(api_base="https://zen.example.com/zen/v1")
+            )
+
+
+class TestJsonModeVerifiedHosts:
+    """JSON mode is opt-in: only verified hosts (and Zen HY3) get it."""
+
+    @pytest.mark.parametrize("host", sorted(JSON_MODE_VERIFIED_HOSTS))
+    def test_every_verified_host_gets_json_mode(self, host):
+        assert _openai_compatible_supports_json_mode(
+            _compatible(model="step-2", api_base=f"https://{host}/v1")
+        )
+
+    def test_stepfun_gets_json_mode(self):
+        assert _openai_compatible_supports_json_mode(
+            _compatible(model="step-2-16k", api_base="https://api.stepfun.com/v1")
+        )
+
+    @pytest.mark.parametrize(
+        "api_base",
+        [
+            "https://llm.internal.example.com/v1",
+            "http://localhost:11434/v1",
+            "https://api.stepfun.com.evil.com/v1",  # verified host as a prefix label
+            "https://not-api.stepfun.com/v1",  # lookalike registrable domain
+            None,
+        ],
+    )
+    def test_unknown_endpoints_do_not_get_json_mode(self, api_base):
+        assert not _openai_compatible_supports_json_mode(
+            _compatible(model="some-model", api_base=api_base)
+        )
+
+    def test_non_compatible_providers_do_not_use_the_allowlist(self):
+        assert not _openai_compatible_supports_json_mode(
+            LLMConfig(
+                provider="openai",
+                model="gpt-4o",
+                api_key="k",
+                api_base="https://api.stepfun.com/v1",
+            )
+        )
+
+    def test_json_mode_reads_the_verified_hosts_constant(self):
+        """Matching must come from the constant, not an inlined literal."""
+        with patch("app.llm.JSON_MODE_VERIFIED_HOSTS", frozenset({"api.example.com"})):
+            assert not _openai_compatible_supports_json_mode(
+                _compatible(model="step-2", api_base="https://api.stepfun.com/v1")
+            )
+            assert _openai_compatible_supports_json_mode(
+                _compatible(model="step-2", api_base="https://api.example.com/v1")
+            )

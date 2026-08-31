@@ -16,7 +16,7 @@ from fastapi.responses import Response
 from pydantic import ValidationError
 
 from app.config_cache import get_content_language, load_config as _load_config
-from app.database import db
+from app.database import ResumeNotFoundError, db
 from app.pdf import render_resume_pdf, PDFRenderError
 from app.config import settings
 
@@ -1729,12 +1729,13 @@ async def retry_processing(resume_id: str) -> ResumeUploadResponse:
         logger.warning(f"Retry processing failed for resume {resume_id}: {e}")
         try:
             await db.update_resume(resume_id, {"processing_status": "failed"})
-        except ValueError as update_error:
+        except ResumeNotFoundError:
             # The user can delete a resume while a long LLM retry is in
             # progress.  Do not turn that benign race into a server traceback.
-            if "Resume not found" in str(update_error):
-                raise HTTPException(status_code=404, detail="Resume was deleted during retry.") from e
-            raise
+            # Keyed on the exception type, never on its message text.
+            raise HTTPException(
+                status_code=404, detail="Resume was deleted during retry."
+            ) from e
         return ResumeUploadResponse(
             message="Retry processing failed",
             request_id=str(uuid4()),

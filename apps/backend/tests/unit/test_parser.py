@@ -10,11 +10,23 @@ import pytest
 from unittest.mock import AsyncMock, patch
 
 from app.services.parser import (
+    _MAX_RESUME_CONTENT_RECURSION,
     _extract_markdown_dates,
     has_meaningful_resume_content,
     parse_resume_to_json,
     restore_dates_from_markdown,
 )
+
+
+def _wrap(value: object, levels: int) -> object:
+    """Nest ``value`` inside ``levels`` plain dicts.
+
+    ``has_meaningful_resume_content`` starts the recursion at depth 0 on the
+    section value, so ``levels`` wrappers put the string at depth ``levels``.
+    """
+    for _ in range(levels):
+        value = {"value": value}
+    return value
 
 
 class TestExtractMarkdownDates:
@@ -148,6 +160,49 @@ class TestMeaningfulResumeContent:
             deeply_nested = {"value": deeply_nested}
 
         assert has_meaningful_resume_content({"summary": deeply_nested}) is False
+
+    def test_finds_content_at_the_last_allowed_depth(self):
+        """Boundary: a value at depth ``limit - 1`` is still inspected."""
+        nested = _wrap("Resume content", _MAX_RESUME_CONTENT_RECURSION - 1)
+
+        assert has_meaningful_resume_content({"summary": nested}) is True
+
+    def test_rejects_content_one_level_past_the_limit(self):
+        """Boundary: a value at exactly ``limit`` is cut off (declared empty).
+
+        This is the documented, accepted false negative. It is unreachable for
+        schema-valid resumes -- see test_deepest_real_schema_content_is_found
+        and the comment on _MAX_RESUME_CONTENT_RECURSION.
+        """
+        nested = _wrap("Resume content", _MAX_RESUME_CONTENT_RECURSION)
+
+        assert has_meaningful_resume_content({"summary": nested}) is False
+
+    def test_deepest_real_schema_content_is_found(self):
+        """The deepest path ResumeData allows (depth 5) stays well inside 10.
+
+        customSections(0) -> CustomSection(1) -> items(2) -> item(3)
+        -> description(4) -> bullet(5).
+        """
+        assert has_meaningful_resume_content(
+            {
+                "customSections": {
+                    "publications": {
+                        "sectionType": "itemList",
+                        "items": [
+                            {
+                                "id": 0,
+                                "title": "",
+                                "subtitle": None,
+                                "years": "",
+                                "description": ["A paper nobody should lose"],
+                                "descriptionStyles": [],
+                            }
+                        ],
+                    }
+                }
+            }
+        ) is True
 
     @pytest.mark.asyncio
     @patch("app.services.parser.complete_json", new_callable=AsyncMock)

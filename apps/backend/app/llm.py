@@ -51,6 +51,42 @@ MAX_JSON_CONTENT_SIZE = 1024 * 1024  # 1MB
 # automatically clamped to the model's actual capacity.
 DEFAULT_JSON_MAX_TOKENS = 8192
 
+# ---------------------------------------------------------------------------
+# OpenAI-compatible endpoint allowlists
+#
+# Why this exists: custom OpenAI-compatible servers expose no capability
+# discovery API, so there is no way to ask an endpoint at runtime whether it
+# accepts OpenAI JSON mode (``response_format={"type": "json_object"}``).
+# Sending it optimistically to an unverified server can turn a prompt-only JSON
+# request that previously worked into a hard 400, so support is opt-in: an
+# endpoint gets JSON mode only when it appears below.
+#
+# Bar for adding an entry: the endpoint must be *verified to support OpenAI JSON
+# mode* - a real request against the live endpoint that came back with a
+# parseable JSON body. A vendor doc claiming OpenAI compatibility is not enough.
+#
+# Which constant to edit when adding a provider:
+#   * A server that accepts plain OpenAI JSON mode -> add its lowercase
+#     hostname to ``JSON_MODE_VERIFIED_HOSTS``. Hosts are compared against the
+#     exact parsed hostname of ``api_base``, so lookalike domains such as
+#     ``evil-opencode.ai`` never match.
+#   * A new OpenCode Zen HY3 model alias -> add it (lowercased) to
+#     ``OPENCODE_ZEN_HY3_MODELS``. The Zen route is separate from the plain host
+#     allowlist because it also drives a vendor-specific ``no_think`` reasoning
+#     switch, and must stay scoped to the exact gateway/model pair.
+# ---------------------------------------------------------------------------
+
+#: Exact hostname of the OpenCode Zen gateway.
+OPENCODE_ZEN_HOST: str = "opencode.ai"
+#: Path prefix identifying the Zen gateway on that host (``/zen``, ``/zen/v1``, ...).
+OPENCODE_ZEN_PATH_PREFIX: str = "/zen"
+#: Lowercased model names served by Zen's HY3-compatible route.
+OPENCODE_ZEN_HY3_MODELS: frozenset[str] = frozenset({"hy3", "hy3-free"})
+
+#: Hostnames verified to accept OpenAI JSON mode over an ``openai_compatible``
+#: endpoint. See the comment block above before adding to this set.
+JSON_MODE_VERIFIED_HOSTS: frozenset[str] = frozenset({"api.stepfun.com"})
+
 
 class LLMConfig(BaseModel):
     """LLM configuration model."""
@@ -220,19 +256,24 @@ def _uses_opencode_zen_hy3(config: LLMConfig) -> bool:
 
     HY3 is a reasoning model.  Zen exposes its supported switch as top-level
     ``reasoning_effort: \"no_think\"``.  Scope this workaround to the exact
-    gateway/model pair so an unrelated OpenAI-compatible server never receives
-    a vendor-specific parameter.
+    gateway/model pair - ``OPENCODE_ZEN_HOST`` + ``OPENCODE_ZEN_PATH_PREFIX`` +
+    ``OPENCODE_ZEN_HY3_MODELS`` - so an unrelated OpenAI-compatible server never
+    receives a vendor-specific parameter.
     """
     if config.provider != "openai_compatible" or not isinstance(config.model, str):
         return False
-    if config.model.strip().lower() not in {"hy3", "hy3-free"}:
+    if config.model.strip().lower() not in OPENCODE_ZEN_HY3_MODELS:
         return False
     if not isinstance(config.api_base, str):
         return False
     parsed = urlsplit(config.api_base.strip())
+    if (parsed.hostname or "").lower() != OPENCODE_ZEN_HOST:
+        return False
+    # ``/zen``, ``/zen/`` and ``/zen/<segment>`` are all the Zen gateway; a
+    # merely prefixed path such as ``/zenith`` is a different service.
     path = parsed.path.rstrip("/")
-    return (parsed.hostname or "").lower() == "opencode.ai" and (
-        path == "/zen" or path.startswith("/zen/")
+    return path == OPENCODE_ZEN_PATH_PREFIX or path.startswith(
+        f"{OPENCODE_ZEN_PATH_PREFIX}/"
     )
 
 
@@ -241,13 +282,15 @@ def _openai_compatible_supports_json_mode(config: LLMConfig) -> bool:
 
     Custom OpenAI-compatible servers have no uniform capability-discovery API.
     Sending ``response_format`` to every one of them can turn a prompt-only
-    JSON request that previously worked into a 400. Keep this allowlist limited
-    to endpoints that have been verified to support OpenAI JSON mode.
+    JSON request that previously worked into a 400, so this stays an allowlist:
+    an endpoint qualifies only when its host is in ``JSON_MODE_VERIFIED_HOSTS``
+    or it is the OpenCode Zen HY3 route. Read the allowlist comment block above
+    those constants before adding an entry.
     """
     if config.provider != "openai_compatible" or not isinstance(config.api_base, str):
         return False
     host = (urlsplit(config.api_base.strip()).hostname or "").lower()
-    return _uses_opencode_zen_hy3(config) or host == "api.stepfun.com"
+    return _uses_opencode_zen_hy3(config) or host in JSON_MODE_VERIFIED_HOSTS
 
 
 def _extract_text_parts(

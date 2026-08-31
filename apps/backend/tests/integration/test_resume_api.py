@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.database import ResumeNotFoundError
 from app.main import app
 from app.schemas import InterviewPrepData
 
@@ -366,6 +367,83 @@ class TestRetryProcessing:
                 "processing_status": "ready",
             },
         )
+
+
+    @patch("app.routers.resumes.parse_resume_to_json", new_callable=AsyncMock)
+    @patch("app.routers.resumes.db", new_callable=AsyncMock)
+    async def test_retry_returns_404_when_resume_deleted_mid_retry(
+        self, mock_db, mock_parse, client, mock_resume_record
+    ):
+        """A resume deleted during a long retry yields 404, not a traceback.
+
+        The 404 is keyed on the ResumeNotFoundError *type*. The message here is
+        deliberately reworded to contain no "Resume not found" substring, so
+        this test still passes if someone rewrites database.py's error text --
+        and fails if the router goes back to string-matching.
+        """
+        mock_db.get_resume.return_value = {
+            **mock_resume_record,
+            "processing_status": "failed",
+        }
+        mock_parse.side_effect = RuntimeError("llm exploded")
+        deleted = ResumeNotFoundError("res-123")
+        deleted.args = ("row vanished; totally different wording",)
+        mock_db.update_resume.side_effect = deleted
+
+        async with client:
+            resp = await client.post("/api/v1/resumes/res-123/retry-processing")
+
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Resume was deleted during retry."
+
+    @patch("app.routers.resumes.parse_resume_to_json", new_callable=AsyncMock)
+    @patch("app.routers.resumes.db", new_callable=AsyncMock)
+    async def test_retry_does_not_swallow_unrelated_value_errors(
+        self, mock_db, mock_parse, client, mock_resume_record
+    ):
+        """Only ResumeNotFoundError becomes a 404; other ValueErrors propagate."""
+        mock_db.get_resume.return_value = {
+            **mock_resume_record,
+            "processing_status": "failed",
+        }
+        mock_parse.side_effect = RuntimeError("llm exploded")
+        mock_db.update_resume.side_effect = ValueError("Resume not found: res-123")
+
+        with pytest.raises(ValueError, match="Resume not found"):
+            async with client:
+                await client.post("/api/v1/resumes/res-123/retry-processing")
+
+
+class TestResumeNotFoundError:
+    """app.database.ResumeNotFoundError backward compatibility."""
+
+    def test_is_a_value_error(self):
+        """Subclassing ValueError keeps every pre-existing handler working."""
+        assert issubclass(ResumeNotFoundError, ValueError)
+
+        caught = False
+        try:
+            raise ResumeNotFoundError("res-123")
+        except ValueError as exc:
+            caught = True
+            assert isinstance(exc, ResumeNotFoundError)
+        assert caught
+
+    def test_carries_the_resume_id(self):
+        error = ResumeNotFoundError("res-123")
+        assert error.resume_id == "res-123"
+        assert "res-123" in str(error)
+
+    async def test_real_update_resume_raises_the_typed_error(self, tmp_path):
+        """The real Database.update_resume raises the typed error, not bare ValueError."""
+        from app.database import Database
+
+        database = Database(db_path=tmp_path / "typed_error.db")
+        try:
+            with pytest.raises(ResumeNotFoundError):
+                await database.update_resume("does-not-exist", {"title": "X"})
+        finally:
+            await database.close()
 
 
 class TestUploadResume:

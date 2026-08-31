@@ -28,52 +28,9 @@ import {
   type ResumeListItem,
 } from '@/lib/api/resume';
 import { useStatusCache } from '@/lib/context/status-cache';
+import { hasMeaningfulResumeContent } from '@/lib/utils/resume-content';
 
 type ProcessingStatus = 'pending' | 'processing' | 'ready' | 'failed' | 'loading';
-
-const nonContentResumeKeys = new Set([
-  'id',
-  'sectionType',
-  'descriptionStyles',
-  'isDefault',
-  'isVisible',
-  'order',
-  'key',
-  'displayName',
-]);
-const maxResumeContentRecursion = 10;
-
-const hasMeaningfulResumeValue = (
-  value: unknown,
-  depth = 0,
-  filterStructuralKeys = true
-): boolean => {
-  if (depth >= maxResumeContentRecursion) return false;
-  if (typeof value === 'string') return Boolean(value.trim());
-  if (Array.isArray(value)) {
-    return value.some((item) => hasMeaningfulResumeValue(item, depth + 1));
-  }
-  if (!value || typeof value !== 'object') return false;
-  return Object.entries(value as Record<string, unknown>).some(
-    ([key, item]) =>
-      (!filterStructuralKeys || !nonContentResumeKeys.has(key)) &&
-      hasMeaningfulResumeValue(item, depth + 1)
-  );
-};
-
-const hasMeaningfulResumeContent = (value: unknown): boolean => {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const resume = value as Record<string, unknown>;
-  return [
-    'personalInfo',
-    'summary',
-    'workExperience',
-    'education',
-    'personalProjects',
-    'additional',
-    'customSections',
-  ].some((section) => hasMeaningfulResumeValue(resume[section], 0, section !== 'customSections'));
-};
 
 export default function DashboardPage() {
   const { t, locale } = useTranslations();

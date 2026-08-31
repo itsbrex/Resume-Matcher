@@ -975,6 +975,15 @@
     }
   },
   "tracker": {
+    "manage": "Gestionar",
+    "manageDialog": {
+      "title": "Gestionar columnas",
+      "description": "Elige qué etapas aparecen en el tablero.",
+      "visible": "Visible",
+      "hidden": "Oculta",
+      "lastVisibleHint": "Al menos una etapa debe permanecer visible.",
+      "close": "Listo"
+    },
     "scroll": {
       "prev": "Desplazar a la izquierda",
       "next": "Desplazar a la derecha",

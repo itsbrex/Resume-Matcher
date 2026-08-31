@@ -975,6 +975,15 @@
     }
   },
   "tracker": {
+    "manage": "Gérer",
+    "manageDialog": {
+      "title": "Gérer les colonnes",
+      "description": "Choisissez les étapes affichées sur le tableau.",
+      "visible": "Visible",
+      "hidden": "Masquée",
+      "lastVisibleHint": "Au moins une étape doit rester visible.",
+      "close": "Terminé"
+    },
     "scroll": {
       "prev": "Faire défiler à gauche",
       "next": "Faire défiler à droite",

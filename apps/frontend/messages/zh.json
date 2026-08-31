@@ -975,6 +975,15 @@
     }
   },
   "tracker": {
+    "manage": "管理",
+    "manageDialog": {
+      "title": "管理看板列",
+      "description": "选择在看板上显示的阶段。",
+      "visible": "已显示",
+      "hidden": "已隐藏",
+      "lastVisibleHint": "至少需要保留一个阶段处于显示状态。",
+      "close": "完成"
+    },
     "scroll": {
       "prev": "向左滚动",
       "next": "向右滚动",

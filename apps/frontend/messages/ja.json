@@ -975,6 +975,15 @@
     }
   },
   "tracker": {
+    "manage": "管理",
+    "manageDialog": {
+      "title": "列の管理",
+      "description": "ボードに表示するステージを選択します。",
+      "visible": "表示中",
+      "hidden": "非表示",
+      "lastVisibleHint": "少なくとも1つのステージは表示しておく必要があります。",
+      "close": "完了"
+    },
     "scroll": {
       "prev": "左へスクロール",
       "next": "右へスクロール",

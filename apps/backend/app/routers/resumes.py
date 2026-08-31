@@ -16,7 +16,7 @@ from fastapi.responses import Response
 from pydantic import ValidationError
 
 from app.config_cache import get_content_language, load_config as _load_config
-from app.database import db
+from app.database import ResumeNotFoundError, db
 from app.pdf import render_resume_pdf, PDFRenderError
 from app.config import settings
 
@@ -46,7 +46,12 @@ from app.schemas import (
     UpdateTitleRequest,
     normalize_resume_data,
 )
-from app.services.parser import parse_document, parse_resume_to_json, restore_dates_from_markdown
+from app.services.parser import (
+    has_meaningful_resume_content,
+    parse_document,
+    parse_resume_to_json,
+    restore_dates_from_markdown,
+)
 from app.services.improver import (
     MONTH_PATTERN,
     apply_diffs,
@@ -1680,16 +1685,21 @@ async def retry_processing(resume_id: str) -> ResumeUploadResponse:
     """Retry AI processing for a failed or stuck resume.
 
     Re-runs parse_resume_to_json() on the stored markdown content.
-    Works for resumes with processing_status == "failed" or "processing".
+    Works for failed/in-progress resumes and legacy ``ready`` records whose
+    structured data is empty due to an earlier parser false positive.
     """
     resume = await db.get_resume(resume_id)
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
 
-    if resume.get("processing_status") not in ("failed", "processing"):
+    status = resume.get("processing_status")
+    can_retry_legacy_empty_ready = status == "ready" and not has_meaningful_resume_content(
+        resume.get("processed_data") or {}
+    )
+    if status not in ("failed", "processing") and not can_retry_legacy_empty_ready:
         raise HTTPException(
             status_code=400,
-            detail="Only resumes with 'failed' or 'processing' status can be retried.",
+            detail="Only failed, processing, or empty legacy resumes can be retried.",
         )
 
     markdown_content = resume.get("content", "")
@@ -1717,7 +1727,15 @@ async def retry_processing(resume_id: str) -> ResumeUploadResponse:
         )
     except Exception as e:
         logger.warning(f"Retry processing failed for resume {resume_id}: {e}")
-        await db.update_resume(resume_id, {"processing_status": "failed"})
+        try:
+            await db.update_resume(resume_id, {"processing_status": "failed"})
+        except ResumeNotFoundError:
+            # The user can delete a resume while a long LLM retry is in
+            # progress.  Do not turn that benign race into a server traceback.
+            # Keyed on the exception type, never on its message text.
+            raise HTTPException(
+                status_code=404, detail="Resume was deleted during retry."
+            ) from e
         return ResumeUploadResponse(
             message="Retry processing failed",
             request_id=str(uuid4()),

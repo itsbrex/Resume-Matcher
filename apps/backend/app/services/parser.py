@@ -116,6 +116,89 @@ def restore_dates_from_markdown(
     return parsed_data
 
 
+_NON_CONTENT_RESUME_KEYS = frozenset(
+    {"id", "sectionType", "descriptionStyles", "isDefault", "isVisible", "order", "key", "displayName"}
+)
+# Depth guard against self-referential or pathological LLM output.  Recursion
+# starts at depth 0 on a *top-level section value*, so the deepest user-visible
+# value the real ``ResumeData`` schema can produce sits at depth 5:
+#
+#   customSections(0) -> CustomSection(1) -> items(2) -> CustomSectionItem(3)
+#       -> description(4) -> bullet string(5)
+#
+# Every other content section is shallower: workExperience / personalProjects
+# bottom out at depth 3 (list -> Experience -> description -> bullet),
+# education and additional at depth 2, personalInfo at depth 1, summary at
+# depth 0.  Values are still inspected at depth 9 (the cut-off is ``>= 10``),
+# so the limit leaves four full levels of headroom over the schema maximum.
+# Nothing that validates as ``ResumeData`` can be misjudged empty here;
+# anything deeper is malformed LLM output rather than a resume.  Raise this
+# only if the schema itself grows deeper -- see the boundary tests in
+# tests/unit/test_parser.py::TestMeaningfulResumeContent.
+_MAX_RESUME_CONTENT_RECURSION = 10
+
+
+def _has_meaningful_resume_value(
+    value: Any,
+    *,
+    depth: int = 0,
+    filter_structural_keys: bool = True,
+) -> bool:
+    """Return whether a value contains non-structural, user-visible text.
+
+    Custom-section identifiers are dictionary keys rather than schema fields,
+    so their values are checked without filtering the identifier itself.  Once
+    inside a section, normal structural-key filtering resumes.
+    """
+    if depth >= _MAX_RESUME_CONTENT_RECURSION:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, list):
+        return any(
+            _has_meaningful_resume_value(item, depth=depth + 1)
+            for item in value
+        )
+    if isinstance(value, dict):
+        return any(
+            (not filter_structural_keys or key not in _NON_CONTENT_RESUME_KEYS)
+            and _has_meaningful_resume_value(item, depth=depth + 1)
+            for key, item in value.items()
+        )
+    return False
+
+
+def has_meaningful_resume_content(resume_data: Any) -> bool:
+    """Return whether parsed resume data contains any user-facing content.
+
+    ``ResumeData`` intentionally defaults most fields to empty strings/lists.
+    That is useful for the builder, but it also means an LLM response such as
+    ``{}`` validates successfully.  Treating that response as a parsed resume
+    produces a blank PDF and makes every downstream tailoring request operate
+    on empty data.
+    """
+
+    if not isinstance(resume_data, dict):
+        return False
+
+    content_sections = (
+        "personalInfo",
+        "summary",
+        "workExperience",
+        "education",
+        "personalProjects",
+        "additional",
+        "customSections",
+    )
+    return any(
+        _has_meaningful_resume_value(
+            resume_data.get(section),
+            filter_structural_keys=section != "customSections",
+        )
+        for section in content_sections
+    )
+
+
 async def parse_document(content: bytes, filename: str) -> str:
     """Convert PDF/DOCX to Markdown using markitdown.
 
@@ -167,7 +250,7 @@ async def parse_resume_to_json(markdown_text: str) -> dict[str, Any]:
     result = await complete_json(
         prompt=prompt,
         system_prompt="You are a JSON extraction engine. Output only valid JSON, no explanations.",
-        max_tokens=get_safe_max_tokens(model_name),
+        max_tokens=get_safe_max_tokens(model_name, config=config),
         retries=3,
     )
 
@@ -176,4 +259,7 @@ async def parse_resume_to_json(markdown_text: str) -> dict[str, Any]:
 
     # Validate against schema
     validated = ResumeData.model_validate(result)
-    return validated.model_dump()
+    parsed_data = validated.model_dump()
+    if not has_meaningful_resume_content(parsed_data):
+        raise ValueError("LLM returned an empty structured resume.")
+    return parsed_data

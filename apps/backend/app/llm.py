@@ -51,6 +51,42 @@ MAX_JSON_CONTENT_SIZE = 1024 * 1024  # 1MB
 # automatically clamped to the model's actual capacity.
 DEFAULT_JSON_MAX_TOKENS = 8192
 
+# ---------------------------------------------------------------------------
+# OpenAI-compatible endpoint allowlists
+#
+# Why this exists: custom OpenAI-compatible servers expose no capability
+# discovery API, so there is no way to ask an endpoint at runtime whether it
+# accepts OpenAI JSON mode (``response_format={"type": "json_object"}``).
+# Sending it optimistically to an unverified server can turn a prompt-only JSON
+# request that previously worked into a hard 400, so support is opt-in: an
+# endpoint gets JSON mode only when it appears below.
+#
+# Bar for adding an entry: the endpoint must be *verified to support OpenAI JSON
+# mode* - a real request against the live endpoint that came back with a
+# parseable JSON body. A vendor doc claiming OpenAI compatibility is not enough.
+#
+# Which constant to edit when adding a provider:
+#   * A server that accepts plain OpenAI JSON mode -> add its lowercase
+#     hostname to ``JSON_MODE_VERIFIED_HOSTS``. Hosts are compared against the
+#     exact parsed hostname of ``api_base``, so lookalike domains such as
+#     ``evil-opencode.ai`` never match.
+#   * A new OpenCode Zen HY3 model alias -> add it (lowercased) to
+#     ``OPENCODE_ZEN_HY3_MODELS``. The Zen route is separate from the plain host
+#     allowlist because it also drives a vendor-specific ``no_think`` reasoning
+#     switch, and must stay scoped to the exact gateway/model pair.
+# ---------------------------------------------------------------------------
+
+#: Exact hostname of the OpenCode Zen gateway.
+OPENCODE_ZEN_HOST: str = "opencode.ai"
+#: Path prefix identifying the Zen gateway on that host (``/zen``, ``/zen/v1``, ...).
+OPENCODE_ZEN_PATH_PREFIX: str = "/zen"
+#: Lowercased model names served by Zen's HY3-compatible route.
+OPENCODE_ZEN_HY3_MODELS: frozenset[str] = frozenset({"hy3", "hy3-free"})
+
+#: Hostnames verified to accept OpenAI JSON mode over an ``openai_compatible``
+#: endpoint. See the comment block above before adding to this set.
+JSON_MODE_VERIFIED_HOSTS: frozenset[str] = frozenset({"api.stepfun.com"})
+
 
 class LLMConfig(BaseModel):
     """LLM configuration model."""
@@ -215,11 +251,61 @@ def _effective_api_key(provider: str, api_key: str) -> str:
     return api_key
 
 
-def _extract_text_parts(value: Any, depth: int = 0, max_depth: int = 10) -> list[str]:
+def _uses_opencode_zen_hy3(config: LLMConfig) -> bool:
+    """Return whether a request targets OpenCode Zen's HY3-compatible route.
+
+    HY3 is a reasoning model.  Zen exposes its supported switch as top-level
+    ``reasoning_effort: \"no_think\"``.  Scope this workaround to the exact
+    gateway/model pair - ``OPENCODE_ZEN_HOST`` + ``OPENCODE_ZEN_PATH_PREFIX`` +
+    ``OPENCODE_ZEN_HY3_MODELS`` - so an unrelated OpenAI-compatible server never
+    receives a vendor-specific parameter.
+    """
+    if config.provider != "openai_compatible" or not isinstance(config.model, str):
+        return False
+    if config.model.strip().lower() not in OPENCODE_ZEN_HY3_MODELS:
+        return False
+    if not isinstance(config.api_base, str):
+        return False
+    parsed = urlsplit(config.api_base.strip())
+    if (parsed.hostname or "").lower() != OPENCODE_ZEN_HOST:
+        return False
+    # ``/zen``, ``/zen/`` and ``/zen/<segment>`` are all the Zen gateway; a
+    # merely prefixed path such as ``/zenith`` is a different service.
+    path = parsed.path.rstrip("/")
+    return path == OPENCODE_ZEN_PATH_PREFIX or path.startswith(
+        f"{OPENCODE_ZEN_PATH_PREFIX}/"
+    )
+
+
+def _openai_compatible_supports_json_mode(config: LLMConfig) -> bool:
+    """Return whether a compatible endpoint is known to accept JSON mode.
+
+    Custom OpenAI-compatible servers have no uniform capability-discovery API.
+    Sending ``response_format`` to every one of them can turn a prompt-only
+    JSON request that previously worked into a 400, so this stays an allowlist:
+    an endpoint qualifies only when its host is in ``JSON_MODE_VERIFIED_HOSTS``
+    or it is the OpenCode Zen HY3 route. Read the allowlist comment block above
+    those constants before adding an entry.
+    """
+    if config.provider != "openai_compatible" or not isinstance(config.api_base, str):
+        return False
+    host = (urlsplit(config.api_base.strip()).hostname or "").lower()
+    return _uses_opencode_zen_hy3(config) or host in JSON_MODE_VERIFIED_HOSTS
+
+
+def _extract_text_parts(
+    value: Any,
+    depth: int = 0,
+    max_depth: int = 10,
+    *,
+    exclude_reasoning: bool = False,
+) -> list[str]:
     """Recursively extract text segments from nested response structures.
 
     Handles strings, lists, dicts with 'text'/'content'/'value' keys, and objects
-    with text/content attributes. Limits recursion depth to avoid cycles.
+    with text/content attributes. Limits recursion depth to avoid cycles.  Set
+    ``exclude_reasoning`` for structured output, where typed reasoning blocks
+    must not be joined with a model's final answer.
 
     Args:
         value: Input value that may contain text in strings, lists, dicts, or objects.
@@ -242,26 +328,82 @@ def _extract_text_parts(value: Any, depth: int = 0, max_depth: int = 10) -> list
         parts: list[str] = []
         next_depth = depth + 1
         for item in value:
-            parts.extend(_extract_text_parts(item, next_depth, max_depth))
+            parts.extend(
+                _extract_text_parts(
+                    item,
+                    next_depth,
+                    max_depth,
+                    exclude_reasoning=exclude_reasoning,
+                )
+            )
         return parts
 
     if isinstance(value, dict):
+        block_type = value.get("type")
+        if (
+            exclude_reasoning
+            and isinstance(block_type, str)
+            and block_type.lower() in _REASONING_BLOCK_TYPES
+        ):
+            return []
         next_depth = depth + 1
         if "text" in value:
-            return _extract_text_parts(value.get("text"), next_depth, max_depth)
+            return _extract_text_parts(
+                value.get("text"),
+                next_depth,
+                max_depth,
+                exclude_reasoning=exclude_reasoning,
+            )
         if "content" in value:
-            return _extract_text_parts(value.get("content"), next_depth, max_depth)
+            return _extract_text_parts(
+                value.get("content"),
+                next_depth,
+                max_depth,
+                exclude_reasoning=exclude_reasoning,
+            )
         if "value" in value:
-            return _extract_text_parts(value.get("value"), next_depth, max_depth)
+            return _extract_text_parts(
+                value.get("value"),
+                next_depth,
+                max_depth,
+                exclude_reasoning=exclude_reasoning,
+            )
         return []
 
+    block_type = getattr(value, "type", None)
+    if (
+        exclude_reasoning
+        and isinstance(block_type, str)
+        and block_type.lower() in _REASONING_BLOCK_TYPES
+    ):
+        return []
     next_depth = depth + 1
     if hasattr(value, "text"):
-        return _extract_text_parts(getattr(value, "text"), next_depth, max_depth)
+        return _extract_text_parts(
+            getattr(value, "text"),
+            next_depth,
+            max_depth,
+            exclude_reasoning=exclude_reasoning,
+        )
     if hasattr(value, "content"):
-        return _extract_text_parts(getattr(value, "content"), next_depth, max_depth)
+        return _extract_text_parts(
+            getattr(value, "content"),
+            next_depth,
+            max_depth,
+            exclude_reasoning=exclude_reasoning,
+        )
+    if hasattr(value, "value"):
+        return _extract_text_parts(
+            getattr(value, "value"),
+            next_depth,
+            max_depth,
+            exclude_reasoning=exclude_reasoning,
+        )
 
     return []
+
+
+_REASONING_BLOCK_TYPES = frozenset({"analysis", "reasoning", "reasoning_content", "thinking"})
 
 
 def _join_text_parts(parts: list[str]) -> str | None:
@@ -334,6 +476,36 @@ def _extract_choice_text(choice: Any) -> str | None:
         value = _safe_get(choice, field)
         if value is not None:
             extracted = _join_text_parts(_extract_text_parts(value))
+            if extracted:
+                return extracted
+
+    return None
+
+
+def _extract_choice_primary_text(choice: Any) -> str | None:
+    """Extract only a model's final answer, never its reasoning trace.
+
+    Reasoning models commonly return their chain-of-thought in
+    ``reasoning_content`` before (or, when the output budget is exhausted,
+    instead of) the user-facing ``content``.  That trace is not an answer and
+    must never be fed into the JSON parser.  The broader
+    :func:`_extract_choice_text` intentionally retains its reasoning fallback
+    for the health-check UI, where it is useful evidence that a provider can
+    respond.
+    """
+    message = _safe_get(choice, "message")
+    content = _join_text_parts(
+        _extract_text_parts(_safe_get(message, "content"), exclude_reasoning=True)
+    )
+    if content:
+        return content
+
+    for field in ("text", "delta"):
+        value = _safe_get(choice, field)
+        if value is not None:
+            extracted = _join_text_parts(
+                _extract_text_parts(value, exclude_reasoning=True)
+            )
             if extracted:
                 return extracted
 
@@ -872,7 +1044,11 @@ def _is_response_format_unsupported(error: Exception) -> bool:
 
 FALLBACK_MAX_TOKENS = 4096
 
-def get_safe_max_tokens(model_name: str, requested: int = DEFAULT_JSON_MAX_TOKENS) -> int:
+def get_safe_max_tokens(
+    model_name: str,
+    requested: int = DEFAULT_JSON_MAX_TOKENS,
+    config: LLMConfig | None = None,
+) -> int:
     """Return a token count safe for the given model, clamped to its output limit.
 
     Queries LiteLLM's model registry for ``max_output_tokens`` and returns
@@ -880,11 +1056,14 @@ def get_safe_max_tokens(model_name: str, requested: int = DEFAULT_JSON_MAX_TOKEN
     what the backend actually supports.
 
     If the model is not in the registry (e.g. custom Ollama models), it falls
-    back to a safe conservative limit (FALLBACK_MAX_TOKENS).
+    back to a conservative limit. The verified OpenCode Zen HY3 route is an
+    exception because JSON extraction disables reasoning for that model and
+    needs the full structured-output budget.
 
     Args:
         model_name: LiteLLM-formatted model name (from get_model_name).
         requested: Desired token budget; defaults to DEFAULT_JSON_MAX_TOKENS.
+        config: Optional provider configuration for scoped compatibility rules.
 
     Returns:
         Safe token count, clamped correctly and always >= 1.
@@ -907,11 +1086,15 @@ def get_safe_max_tokens(model_name: str, requested: int = DEFAULT_JSON_MAX_TOKEN
     except Exception:
         pass  # Model not in registry, drop down to fallback logic
 
-    safe = min(safe_requested, FALLBACK_MAX_TOKENS)
+    fallback_limit = (
+        DEFAULT_JSON_MAX_TOKENS
+        if config is not None and _uses_opencode_zen_hy3(config)
+        else FALLBACK_MAX_TOKENS
+    )
+    safe = min(safe_requested, fallback_limit)
     logging.debug(
-        "Model %s not in LiteLLM registry, clamping requested max_tokens %d → %d constraint",
+        "Model %s not in LiteLLM registry, using fallback max_tokens %d",
         model_name,
-        safe_requested,
         safe,
     )
     return safe
@@ -1174,11 +1357,15 @@ def _extract_json(content: str, _depth: int = 0) -> str:
         return _extract_json(content[start_idx:], _depth + 1)
 
     # LLM-007: Log unrecognized format for debugging
+    # Model output can include a user's full resume or job description.  Keep
+    # diagnostics useful without writing that personal content to server logs.
     logging.error(
-        "Could not extract JSON from response format. Content preview: %s",
-        content[:200] if content else "<empty>",
+        "Could not extract JSON from response format (response length: %d)",
+        len(content) if content else 0,
     )
-    raise ValueError(f"No JSON found in response: {original[:200]}")
+    # Do not include model output in the exception either: callers log this
+    # exception and model output can contain a user's resume or job details.
+    raise ValueError(f"No JSON found in response (response length: {len(original)})")
 
 
 async def complete_json(
@@ -1212,8 +1399,10 @@ async def complete_json(
         {"role": "user", "content": prompt},
     ]
 
-    # Check if we can use JSON mode
-    use_json_mode = _supports_json_mode(model_name)
+    # Unknown compatible servers may reject response_format. Use JSON mode
+    # when LiteLLM advertises it or when the endpoint is explicitly known to
+    # support it; prompt-only JSON remains the portable default.
+    use_json_mode = _supports_json_mode(model_name) or _openai_compatible_supports_json_mode(config)
     json_mode_failed = False
 
     for attempt in range(retries + 1):
@@ -1247,7 +1436,14 @@ async def complete_json(
                 and reasoning_effort in ("low", "medium", "high")
             ):
                 reasoning_effort = "minimal"
-            if reasoning_effort:
+            # HY3-Free on OpenCode Zen otherwise spends much of its output
+            # allocation in ``reasoning_content`` and truncates large resume
+            # JSON. LiteLLM filters unknown top-level parameters, so use its
+            # OpenAI-compatible ``extra_body`` passthrough for the HY3-native
+            # no_think setting. Scope it to structured-output requests only.
+            if _uses_opencode_zen_hy3(config):
+                kwargs["extra_body"] = {"reasoning_effort": "no_think"}
+            elif reasoning_effort:
                 kwargs["reasoning_effort"] = reasoning_effort
 
             # JSON-012: Fallback to prompt-only JSON mode after JSON-mode failure.
@@ -1257,13 +1453,21 @@ async def complete_json(
                 kwargs["response_format"] = {"type": "json_object"}
 
             response = await router.acompletion(**kwargs)
-            content = _extract_choice_text(response.choices[0])
+            # Never parse ``reasoning_content`` as JSON.  If the model has
+            # consumed its budget on reasoning but produced no final answer,
+            # treat it as an empty completion and retry with the full budget.
+            content = _extract_choice_primary_text(response.choices[0])
 
             if not content:
                 raise ValueError("Empty response from LLM")
 
+            # Do not log response bodies: they frequently contain a resume or
+            # a job description and are therefore user-provided personal data.
             logging.debug(
-                f"LLM response (attempt {attempt + 1}): {content[:300]}")
+                "Received LLM JSON response (attempt %d, length: %d)",
+                attempt + 1,
+                len(content),
+            )
 
             # Extract and parse JSON
             json_str = _extract_json(content)

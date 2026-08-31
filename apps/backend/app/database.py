@@ -45,6 +45,21 @@ APPLICATION_STATUSES: tuple[str, ...] = (
 )
 
 
+class ResumeNotFoundError(ValueError):
+    """Raised when a write targets a resume ID that no longer exists.
+
+    Subclasses ``ValueError`` deliberately: every pre-existing
+    ``except ValueError`` handler around resume writes keeps working unchanged,
+    while callers that need to distinguish "the row is gone" from any other
+    bad-argument error can catch this type instead of string-matching the
+    message (the message is not an API).
+    """
+
+    def __init__(self, resume_id: str) -> None:
+        self.resume_id = resume_id
+        super().__init__(f"Resume not found: {resume_id}")
+
+
 def _now() -> str:
     """Current UTC time as an ISO-8601 string (TinyDB-era format)."""
     return datetime.now(timezone.utc).isoformat()
@@ -310,12 +325,14 @@ class Database:
         """Update resume by ID.
 
         Raises:
-            ValueError: If resume not found.
+            ResumeNotFoundError: If resume not found. It subclasses
+                ``ValueError``, so existing ``except ValueError`` callers are
+                unaffected.
         """
         async with self._session() as session:
             row = await session.get(Resume, resume_id)
             if row is None:
-                raise ValueError(f"Resume not found: {resume_id}")
+                raise ResumeNotFoundError(resume_id)
             for key, value in updates.items():
                 if hasattr(row, key):
                     setattr(row, key, value)

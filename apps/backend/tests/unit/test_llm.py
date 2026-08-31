@@ -1,16 +1,23 @@
 """Unit tests for LLM capability helpers in app.llm."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app.llm import (
+    JSON_MODE_VERIFIED_HOSTS,
+    OPENCODE_ZEN_HY3_MODELS,
     LLMConfig,
     _appears_truncated,
     _azure_foundry_api_version,
+    _extract_choice_primary_text,
     _get_retry_temperature,
     _normalize_api_base,
+    _openai_compatible_supports_json_mode,
     _supports_temperature,
+    _uses_opencode_zen_hy3,
+    get_safe_max_tokens,
     get_model_name,
     resolve_api_key,
 )
@@ -115,6 +122,63 @@ class TestProviderConfiguration:
         stored = {"api_keys": {"azure_foundry": "foundry-key"}}
 
         assert resolve_api_key(stored, "azure_foundry") == "foundry-key"
+
+    def test_recognizes_only_opencode_zen_hy3(self):
+        assert _uses_opencode_zen_hy3(
+            LLMConfig(
+                provider="openai_compatible",
+                model="hy3-free",
+                api_key="",
+                api_base="https://opencode.ai/zen/v1",
+            )
+        )
+        assert not _uses_opencode_zen_hy3(
+            LLMConfig(
+                provider="openai_compatible",
+                model="hy3-free",
+                api_key="",
+                api_base="https://example.com/v1",
+            )
+        )
+
+    def test_recognizes_opencode_zen_without_a_trailing_path_segment(self):
+        config = LLMConfig(
+            provider="openai_compatible",
+            model="hy3-free",
+            api_key="",
+            api_base="https://opencode.ai/zen",
+        )
+        assert _uses_opencode_zen_hy3(config)
+        assert _openai_compatible_supports_json_mode(config)
+
+    @patch("app.llm.litellm.get_model_info", side_effect=Exception("unknown model"))
+    def test_unknown_models_keep_conservative_token_fallback(self, _mock_model_info):
+        assert get_safe_max_tokens("openai/custom-model") == 4096
+
+    @patch("app.llm.litellm.get_model_info", side_effect=Exception("unknown model"))
+    def test_opencode_hy3_gets_full_json_budget_when_unknown(self, _mock_model_info):
+        config = LLMConfig(
+            provider="openai_compatible",
+            model="hy3-free",
+            api_key="",
+            api_base="https://opencode.ai/zen/v1",
+        )
+        assert get_safe_max_tokens("openai/hy3-free", config=config) == 8192
+
+
+def test_primary_text_reads_typed_block_value_attribute():
+    choice = SimpleNamespace(
+        message=SimpleNamespace(
+            content=[
+                SimpleNamespace(
+                    type="output_text",
+                    value='{"required_skills": ["Python"]}',
+                )
+            ]
+        )
+    )
+
+    assert _extract_choice_primary_text(choice) == '{"required_skills": ["Python"]}'
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +422,132 @@ class TestAppearsTruncated:
 
 class TestCompleteJsonFallback:
     """Tests for JSON mode fallback in complete_json()."""
+
+    @pytest.mark.asyncio
+    @patch("app.llm.get_router")
+    @patch("app.llm.get_model_name")
+    @patch("app.llm._supports_json_mode")
+    async def test_known_compatible_endpoint_uses_json_mode(
+        self, mock_supports_json, mock_get_name, mock_get_router
+    ):
+        """Verified compatible endpoints can opt into JSON mode."""
+        mock_supports_json.return_value = False
+        mock_get_name.return_value = "openai/hy3-free"
+
+        choice = MagicMock()
+        choice.message.content = '{"required_skills": ["Python"]}'
+        response = MagicMock()
+        response.choices = [choice]
+        router = MagicMock()
+        router.acompletion = AsyncMock(return_value=response)
+        config = LLMConfig(
+            provider="openai_compatible",
+            model="hy3-free",
+            api_key="",
+            api_base="https://opencode.ai/zen/v1",
+        )
+        mock_get_router.return_value = (router, config)
+
+        from app.llm import complete_json
+
+        result = await complete_json(prompt="Extract keywords", schema_type="keywords")
+
+        assert result == {"required_skills": ["Python"]}
+        assert router.acompletion.call_args.kwargs["response_format"] == {"type": "json_object"}
+
+    @pytest.mark.asyncio
+    @patch("app.llm.get_router")
+    @patch("app.llm.get_model_name")
+    @patch("app.llm._supports_json_mode")
+    async def test_reasoning_only_response_is_not_parsed_as_json(
+        self, mock_supports_json, mock_get_name, mock_get_router
+    ):
+        """A reasoning trace without final content must retry, not be parsed."""
+        mock_supports_json.return_value = False
+        mock_get_name.return_value = "openai/reasoning-model"
+
+        reasoning_only = MagicMock()
+        reasoning_only.message.content = None
+        reasoning_only.message.reasoning_content = '{"required_skills": ["incorrect"]}'
+        completed = MagicMock()
+        completed.message.content = '{"required_skills": ["Python"]}'
+        router = MagicMock()
+        router.acompletion = AsyncMock(
+            side_effect=[
+                MagicMock(choices=[reasoning_only]),
+                MagicMock(choices=[completed]),
+            ]
+        )
+        config = MagicMock()
+        config.provider = "openai_compatible"
+        config.reasoning_effort = None
+        mock_get_router.return_value = (router, config)
+
+        from app.llm import complete_json
+
+        result = await complete_json("Extract keywords", retries=1, schema_type="keywords")
+
+        assert result == {"required_skills": ["Python"]}
+        assert router.acompletion.await_count == 2
+
+    @pytest.mark.asyncio
+    @patch("app.llm.get_router")
+    @patch("app.llm.get_model_name")
+    @patch("app.llm._supports_json_mode")
+    async def test_typed_reasoning_block_is_excluded_from_final_json(
+        self, mock_supports_json, mock_get_name, mock_get_router
+    ):
+        mock_supports_json.return_value = False
+        mock_get_name.return_value = "openai/hy3-free"
+        choice = MagicMock()
+        choice.message.content = [
+            {"type": "reasoning", "text": '{"required_skills": ["incorrect"]}'},
+            {"type": "output_text", "text": '{"required_skills": ["Python"]}'},
+        ]
+        router = MagicMock()
+        router.acompletion = AsyncMock(return_value=MagicMock(choices=[choice]))
+        config = LLMConfig(
+            provider="openai_compatible",
+            model="hy3-free",
+            api_key="",
+            api_base="https://opencode.ai/zen/v1",
+        )
+        mock_get_router.return_value = (router, config)
+
+        from app.llm import complete_json
+
+        result = await complete_json("Extract keywords", schema_type="keywords")
+
+        assert result == {"required_skills": ["Python"]}
+
+    @pytest.mark.asyncio
+    @patch("app.llm.get_router")
+    @patch("app.llm.get_model_name")
+    @patch("app.llm._supports_json_mode")
+    async def test_opencode_hy3_json_request_disables_reasoning(
+        self, mock_supports_json, mock_get_name, mock_get_router
+    ):
+        mock_supports_json.return_value = False
+        mock_get_name.return_value = "openai/hy3-free"
+        choice = MagicMock()
+        choice.message.content = '{"required_skills": ["Python"]}'
+        router = MagicMock()
+        router.acompletion = AsyncMock(return_value=MagicMock(choices=[choice]))
+        config = LLMConfig(
+            provider="openai_compatible",
+            model="hy3-free",
+            api_key="",
+            api_base="https://opencode.ai/zen/v1",
+        )
+        mock_get_router.return_value = (router, config)
+
+        from app.llm import complete_json
+
+        await complete_json("Extract keywords", schema_type="keywords")
+
+        assert router.acompletion.call_args.kwargs["extra_body"] == {
+            "reasoning_effort": "no_think"
+        }
 
     @pytest.mark.asyncio
     @patch("app.llm.get_router")
@@ -704,3 +894,156 @@ class TestScrubSecrets:
         assert "sk-abcd1234efgh5678" not in _scrub_secrets("key sk-abcd1234efgh5678 failed")
         assert "AIzaSyABCDEFGHIJ" not in _scrub_secrets("key AIzaSyABCDEFGHIJ failed")
         assert "tok_secret" not in _scrub_secrets("Authorization: Bearer tok_secret")
+
+
+# ---------------------------------------------------------------------------
+# OpenAI-compatible endpoint allowlists
+# ---------------------------------------------------------------------------
+
+
+def _compatible(model: str = "hy3-free", api_base: str | None = "https://opencode.ai/zen/v1"):
+    """Build an ``openai_compatible`` config for allowlist assertions."""
+    return LLMConfig(
+        provider="openai_compatible",
+        model=model,
+        api_key="",
+        api_base=api_base,
+    )
+
+
+class TestOpenCodeZenHy3Route:
+    """The Zen HY3 route must match its gateway exactly and nothing else."""
+
+    @pytest.mark.parametrize("model", sorted(OPENCODE_ZEN_HY3_MODELS))
+    def test_every_allowlisted_model_matches(self, model):
+        assert _uses_opencode_zen_hy3(_compatible(model=model))
+
+    @pytest.mark.parametrize("model", ["HY3-Free", "  hy3  ", "Hy3"])
+    def test_model_matching_ignores_case_and_surrounding_space(self, model):
+        assert _uses_opencode_zen_hy3(_compatible(model=model))
+
+    @pytest.mark.parametrize(
+        "api_base",
+        [
+            "https://opencode.ai/zen",
+            "https://opencode.ai/zen/",
+            "https://opencode.ai/zen/v1",
+            "https://opencode.ai/zen/v1/",
+            "  https://opencode.ai/zen/v1  ",
+            "https://OpenCode.AI/zen/v1",
+        ],
+    )
+    def test_gateway_path_forms_match(self, api_base):
+        assert _uses_opencode_zen_hy3(_compatible(api_base=api_base))
+
+    def test_bare_zen_path_without_trailing_segment_matches(self):
+        """Regression: ``/zen`` with no trailing segment is the Zen gateway.
+
+        A review note claimed this form was mishandled. ``path.rstrip("/")``
+        normalises ``/zen`` and ``/zen/`` to ``/zen``, which the equality arm
+        accepts, so both the HY3 workaround and JSON mode engage.
+        """
+        config = _compatible(api_base="https://opencode.ai/zen")
+        assert _uses_opencode_zen_hy3(config)
+        assert _openai_compatible_supports_json_mode(config)
+
+    @pytest.mark.parametrize(
+        "api_base",
+        [
+            "https://evil-opencode.ai/zen/v1",  # lookalike registrable domain
+            "https://opencode.ai.evil.com/zen/v1",  # host as a left-hand label
+            "https://zen.opencode.ai/zen/v1",  # subdomain, not the exact host
+            "https://opencode.ai/zenith/v1",  # prefixed but different path
+            "https://opencode.ai/v1",  # right host, not the Zen gateway
+            "https://opencode.ai",  # right host, no path at all
+            "https://example.com/zen/v1",  # unrelated host
+        ],
+    )
+    def test_lookalike_hosts_and_paths_do_not_match(self, api_base):
+        config = _compatible(api_base=api_base)
+        assert not _uses_opencode_zen_hy3(config)
+        assert not _openai_compatible_supports_json_mode(config)
+
+    @pytest.mark.parametrize("model", ["gpt-4o", "hy3-turbo", "qwen2.5"])
+    def test_other_models_on_the_zen_gateway_do_not_match(self, model):
+        config = _compatible(model=model)
+        assert not _uses_opencode_zen_hy3(config)
+        # opencode.ai is not itself a JSON-mode-verified host: only the HY3
+        # route on it is allowlisted.
+        assert not _openai_compatible_supports_json_mode(config)
+
+    def test_other_providers_never_match(self):
+        assert not _uses_opencode_zen_hy3(
+            LLMConfig(
+                provider="openai",
+                model="hy3-free",
+                api_key="k",
+                api_base="https://opencode.ai/zen/v1",
+            )
+        )
+
+    def test_missing_api_base_does_not_match(self):
+        assert not _uses_opencode_zen_hy3(_compatible(api_base=None))
+
+    def test_route_reads_the_model_allowlist_constant(self):
+        """Matching must come from the constant, not an inlined literal."""
+        with patch("app.llm.OPENCODE_ZEN_HY3_MODELS", frozenset({"hy4"})):
+            assert not _uses_opencode_zen_hy3(_compatible(model="hy3-free"))
+            assert _uses_opencode_zen_hy3(_compatible(model="hy4"))
+
+    def test_route_reads_the_host_constant(self):
+        with patch("app.llm.OPENCODE_ZEN_HOST", "zen.example.com"):
+            assert not _uses_opencode_zen_hy3(_compatible())
+            assert _uses_opencode_zen_hy3(
+                _compatible(api_base="https://zen.example.com/zen/v1")
+            )
+
+
+class TestJsonModeVerifiedHosts:
+    """JSON mode is opt-in: only verified hosts (and Zen HY3) get it."""
+
+    @pytest.mark.parametrize("host", sorted(JSON_MODE_VERIFIED_HOSTS))
+    def test_every_verified_host_gets_json_mode(self, host):
+        assert _openai_compatible_supports_json_mode(
+            _compatible(model="step-2", api_base=f"https://{host}/v1")
+        )
+
+    def test_stepfun_gets_json_mode(self):
+        assert _openai_compatible_supports_json_mode(
+            _compatible(model="step-2-16k", api_base="https://api.stepfun.com/v1")
+        )
+
+    @pytest.mark.parametrize(
+        "api_base",
+        [
+            "https://llm.internal.example.com/v1",
+            "http://localhost:11434/v1",
+            "https://api.stepfun.com.evil.com/v1",  # verified host as a prefix label
+            "https://not-api.stepfun.com/v1",  # lookalike registrable domain
+            None,
+        ],
+    )
+    def test_unknown_endpoints_do_not_get_json_mode(self, api_base):
+        assert not _openai_compatible_supports_json_mode(
+            _compatible(model="some-model", api_base=api_base)
+        )
+
+    def test_non_compatible_providers_do_not_use_the_allowlist(self):
+        assert not _openai_compatible_supports_json_mode(
+            LLMConfig(
+                provider="openai",
+                model="gpt-4o",
+                api_key="k",
+                api_base="https://api.stepfun.com/v1",
+            )
+        )
+
+    def test_json_mode_reads_the_verified_hosts_constant(self):
+        """Matching must come from the constant, not an inlined literal."""
+        with patch("app.llm.JSON_MODE_VERIFIED_HOSTS", frozenset({"api.example.com"})):
+            assert not _openai_compatible_supports_json_mode(
+                _compatible(model="step-2", api_base="https://api.stepfun.com/v1")
+            )
+            assert _openai_compatible_supports_json_mode(
+                _compatible(model="step-2", api_base="https://api.example.com/v1")
+            )

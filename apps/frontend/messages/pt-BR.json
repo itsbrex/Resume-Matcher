@@ -975,13 +975,14 @@
     }
   },
   "tracker": {
-    "manage": "Manage",
+    "manage": "Gerenciar",
     "manageDialog": {
-      "title": "Manage Columns",
-      "description": "Choose which stages appear on the board.",
-      "show": "Show",
-      "hide": "Hide",
-      "close": "Done"
+      "title": "Gerenciar colunas",
+      "description": "Escolha quais etapas aparecem no quadro.",
+      "visible": "Visível",
+      "hidden": "Oculta",
+      "lastVisibleHint": "Pelo menos uma etapa deve permanecer visível.",
+      "close": "Concluído"
     },
     "scroll": {
       "prev": "Rolar para a esquerda",

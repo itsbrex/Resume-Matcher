@@ -36,6 +36,7 @@ import { planMove } from './reorder';
 import { ManageColumnsDialog } from './manage-columns-dialog';
 import {
   readHiddenStatuses,
+  toggleHiddenStatus,
   writeHiddenStatuses,
 } from '@/lib/utils/tracker-column-visibility';
 
@@ -60,13 +61,19 @@ export function KanbanBoard() {
   const [openCardId, setOpenCardId] = useState<string | null>(null);
   const [manualAddOpen, setManualAddOpen] = useState(false);
   const [manageOpen, setManageOpen] = useState(false);
-  const [hiddenStatuses, setHiddenStatuses] = useState<Set<ApplicationStatus>>(
-    () => readHiddenStatuses()
+  const [hiddenStatuses, setHiddenStatuses] = useState<Set<ApplicationStatus>>(() =>
+    readHiddenStatuses()
   );
 
-  useEffect(() => {
-    writeHiddenStatuses(hiddenStatuses);
-  }, [hiddenStatuses]);
+  // Persist on an actual change only — an effect keyed on the state would also
+  // write the just-read value straight back on mount.
+  const handleToggleStatus = (status: ApplicationStatus) => {
+    const next = toggleHiddenStatus(hiddenStatuses, status);
+    // Refused (last visible stage): identical instance, nothing to store.
+    if (next === hiddenStatuses) return;
+    setHiddenStatuses(next);
+    writeHiddenStatuses(next);
+  };
 
   // Horizontal-scroll affordance: the seven stages overflow the canvas, so we
   // track whether more columns sit off-screen and surface controls + a stage
@@ -352,17 +359,7 @@ export function KanbanBoard() {
         open={manageOpen}
         onOpenChange={setManageOpen}
         hiddenStatuses={hiddenStatuses}
-        onToggle={(status) =>
-          setHiddenStatuses((prev) => {
-            const next = new Set(prev);
-            if (next.has(status)) {
-              next.delete(status);
-            } else {
-              next.add(status);
-            }
-            return next;
-          })
-        }
+        onToggle={handleToggleStatus}
       />
     </div>
   );

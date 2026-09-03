@@ -1171,6 +1171,7 @@ def _supports_temperature(model_name: str, temperature: float | None = None) -> 
     provider-specific fallbacks for known restrictions:
       - Anthropic claude-opus-4.*: temperature is deprecated
       - Moonshot kimi-k2.6: only temperature=1 allowed
+      - gpt-5.*: only temperature=1 allowed, on OpenAI and Azure alike
 
     Queries LiteLLM's model info for every provider so that capability is
     always determined from the registry rather than a hardcoded list.
@@ -1213,14 +1214,33 @@ def _supports_temperature(model_name: str, temperature: float | None = None) -> 
     if "kimi-k2.6" in model_name.lower() and temperature != 1.0:
         return False
 
+    # The gpt-5 family accepts only the default temperature (1), on OpenAI and
+    # on Azure deployments alike (BerriAI/litellm#13397). The registry lists
+    # temperature as a supported param, which is true but only for that one
+    # value, so the check above does not catch it.
+    #
+    # Matched on name rather than provider, deliberately. A self-hosted
+    # openai_compatible server running its own model under a custom name is
+    # not in the registry and has already returned False above, so scoping by
+    # provider would not reach it. What remains is a name LiteLLM resolves to
+    # a real gpt-5, which every other capability decision in this module
+    # (get_safe_max_tokens, _supports_json_mode) already treats as that model.
+    # The failure modes are asymmetric: omitting temperature costs some retry
+    # variation, sending it to a real gpt-5 fails the request outright.
+    if "gpt-5" in model_name.lower() and temperature != 1.0:
+        return False
+
     return True
 
 
 def _get_retry_temperature(model_name: str, attempt: int, base_temp: float = 0.1) -> float | None:
     """LLM-002: Get temperature for retry attempt.
 
-    Returns None if the model does not support temperature at all.
-    Returns 1.0 for models that only support temperature=1.
+    Returns None when the model will not accept the requested temperature,
+    either because it does not support the parameter at all (Opus 4.x) or
+    because it accepts only the default (gpt-5 family). Omitting the
+    parameter lets the provider apply its own default.
+    Returns 1.0 for kimi-k2.6, which requires an explicit temperature=1.
     Otherwise returns increasing temperatures for retry variation.
     """
     # Moonshot kimi-k2.6 only allows temperature=1.

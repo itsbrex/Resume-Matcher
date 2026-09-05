@@ -68,7 +68,7 @@ apps/backend/app/scripts/__init__.py,Backend runtime or tooling,
 apps/backend/app/scripts/migrate_tinydb_to_sqlite.py,Backend runtime or tooling,
 apps/backend/app/services/__init__.py,Backend business logic,
 apps/backend/app/services/ats.py,Backend business logic,
-apps/backend/app/services/cover_letter.py,Backend business logic,#943; #944; #945; #969
+apps/backend/app/services/cover_letter.py,Backend business logic,#942; #943; #944; #945; #969
 apps/backend/app/services/improver.py,Backend business logic,#943; #944; #945; #969
 apps/backend/app/services/interview_prep.py,Backend business logic,
 apps/backend/app/services/parser.py,Backend business logic,#940; #941; #943; #944; #945; #947; #952; #953; #954; #969; #970
@@ -77,13 +77,13 @@ apps/backend/app/services/resume_preservation.py,Backend business logic,#940; #9
 apps/backend/app/services/resume_wizard.py,Backend business logic,#938; #946; #967; #968
 apps/backend/app/services/resume_wizard_copy.py,Backend business logic,#938; #967; #968
 apps/backend/data/.gitkeep,Backend runtime or tooling,
-apps/backend/e2e_monitor/AGENT_PLAYBOOK.md,Isolated monitoring and evaluation,
+apps/backend/e2e_monitor/AGENT_PLAYBOOK.md,Isolated monitoring and evaluation,#959; #963; #971
 apps/backend/e2e_monitor/README.md,Isolated monitoring and evaluation,#959; #963; #971
 apps/backend/e2e_monitor/__init__.py,Isolated monitoring and evaluation,
 apps/backend/e2e_monitor/__main__.py,Isolated monitoring and evaluation,#959; #963; #971
 apps/backend/e2e_monitor/baseline.py,Isolated monitoring and evaluation,
 apps/backend/e2e_monitor/baseline/baseline.json,Isolated monitoring and evaluation,
-apps/backend/e2e_monitor/bundle.py,Isolated monitoring and evaluation,
+apps/backend/e2e_monitor/bundle.py,Isolated monitoring and evaluation,#959; #963; #971
 apps/backend/e2e_monitor/collect.py,Isolated monitoring and evaluation,
 apps/backend/e2e_monitor/fixtures/jds/backend-eng.txt,Isolated monitoring and evaluation,
 apps/backend/e2e_monitor/fixtures/jds/frontend-eng.txt,Isolated monitoring and evaluation,
@@ -109,7 +109,7 @@ apps/backend/tests/evals/conftest.py,Backend verification,#959; #963; #971
 apps/backend/tests/evals/golden/__init__.py,Backend verification,
 apps/backend/tests/evals/golden/cases.py,Backend verification,#959; #963; #971
 apps/backend/tests/evals/scorers.py,Backend verification,#959; #963; #971
-apps/backend/tests/evals/test_scorers.py,Backend verification,#959; #963; #971
+apps/backend/tests/evals/test_scorers.py,Backend verification,#959; #963; #971; #973; #974
 apps/backend/tests/evals/test_tailoring_eval.py,Backend verification,#959; #963; #971
 apps/backend/tests/integration/__init__.py,Backend verification,
 apps/backend/tests/integration/_temperature_request_probe.py,Backend verification,#975
@@ -118,29 +118,29 @@ apps/backend/tests/integration/test_ai_preservation_api.py,Backend verification,
 apps/backend/tests/integration/test_ai_result_contracts.py,Backend verification,#943; #944; #945; #969
 apps/backend/tests/integration/test_applications_api.py,Backend verification,
 apps/backend/tests/integration/test_backend_isolation.py,Backend verification,#932; #972
-apps/backend/tests/integration/test_config_api.py,Backend verification,#932; #972
+apps/backend/tests/integration/test_config_api.py,Backend verification,#932; #972; #973; #974
 apps/backend/tests/integration/test_confirmation_transactions.py,Backend verification,#948; #949; #950; #951
 apps/backend/tests/integration/test_health_api.py,Backend verification,
 apps/backend/tests/integration/test_jobs_api.py,Backend verification,#955; #956; #957; #958
 apps/backend/tests/integration/test_llm_contract.py,Backend verification,
 apps/backend/tests/integration/test_llm_contract_reliability.py,Backend verification,#943; #944; #945; #969
-apps/backend/tests/integration/test_pdf_grid_geometry.py,Backend verification,
+apps/backend/tests/integration/test_pdf_grid_geometry.py,Backend verification,#960; #961; #962
 apps/backend/tests/integration/test_pdf_lifecycle.py,Backend verification,#960; #961; #962
 apps/backend/tests/integration/test_pdf_multilingual_flow.py,Backend verification,#973; #974
 apps/backend/tests/integration/test_pdf_render.py,Backend verification,
-apps/backend/tests/integration/test_pipeline_e2e.py,Backend verification,#952; #953; #954
+apps/backend/tests/integration/test_pipeline_e2e.py,Backend verification,#952; #953; #954; #973; #974
 apps/backend/tests/integration/test_regenerate_endpoints.py,Backend verification,
-apps/backend/tests/integration/test_resume_api.py,Backend verification,#952; #953; #954
-apps/backend/tests/integration/test_resume_wizard_api.py,Backend verification,#938; #967; #968
+apps/backend/tests/integration/test_resume_api.py,Backend verification,#952; #953; #954; #973; #974
+apps/backend/tests/integration/test_resume_wizard_api.py,Backend verification,#938; #967; #968; #973; #974
 apps/backend/tests/integration/test_storage_atomicity.py,Backend verification,#955; #956; #957; #958
 apps/backend/tests/integration/test_temperature_request_contract.py,Backend verification,#975
 apps/backend/tests/integration/test_tracker_autocreate.py,Backend verification,#948; #949; #950; #951
 apps/backend/tests/integration/test_upload_api.py,Backend verification,
 apps/backend/tests/integration/test_upload_processing.py,Backend verification,#952; #953; #954
 apps/backend/tests/service/__init__.py,Backend verification,
-apps/backend/tests/service/test_improver.py,Backend verification,#943; #944; #945; #969
+apps/backend/tests/service/test_improver.py,Backend verification,#943; #944; #945; #969; #973; #974
 apps/backend/tests/unit/__init__.py,Backend verification,
-apps/backend/tests/unit/test_ai_preservation.py,Backend verification,#940; #941; #947; #970
+apps/backend/tests/unit/test_ai_preservation.py,Backend verification,#940; #941; #947; #959; #963; #970; #971
 apps/backend/tests/unit/test_apply_diffs.py,Backend verification,
 apps/backend/tests/unit/test_check_locale_parity.py,Backend verification,
 apps/backend/tests/unit/test_config_persistence.py,Backend verification,#932; #972
@@ -149,7 +149,7 @@ apps/backend/tests/unit/test_database.py,Backend verification,
 apps/backend/tests/unit/test_description_styles.py,Backend verification,
 apps/backend/tests/unit/test_document_processing.py,Backend verification,#952; #953; #954
 apps/backend/tests/unit/test_e2e_monitor_baseline.py,Backend verification,
-apps/backend/tests/unit/test_e2e_monitor_collect.py,Backend verification,
+apps/backend/tests/unit/test_e2e_monitor_collect.py,Backend verification,#959; #963; #971
 apps/backend/tests/unit/test_e2e_monitor_judge.py,Backend verification,
 apps/backend/tests/unit/test_e2e_monitor_manifest.py,Backend verification,
 apps/backend/tests/unit/test_e2e_monitor_render.py,Backend verification,
@@ -157,7 +157,7 @@ apps/backend/tests/unit/test_e2e_monitor_scores.py,Backend verification,
 apps/backend/tests/unit/test_e2e_monitor_scrub.py,Backend verification,
 apps/backend/tests/unit/test_improve_confirm_hash.py,Backend verification,
 apps/backend/tests/unit/test_interview_prep_service.py,Backend verification,
-apps/backend/tests/unit/test_llm.py,Backend verification,#943; #944; #945; #969; #975
+apps/backend/tests/unit/test_llm.py,Backend verification,#943; #944; #945; #969; #973; #974; #975
 apps/backend/tests/unit/test_llm_providers.py,Backend verification,
 apps/backend/tests/unit/test_monitor_eval_contracts.py,Backend verification,#959; #963; #971
 apps/backend/tests/unit/test_monitor_servers.py,Backend verification,#959; #963; #971
@@ -179,7 +179,7 @@ apps/frontend/app/(default)/dashboard/page.tsx,Frontend route,#935; #936; #937; 
 apps/frontend/app/(default)/layout.tsx,Frontend route,
 apps/frontend/app/(default)/page.tsx,Frontend route,
 apps/frontend/app/(default)/resume-wizard/page.tsx,Frontend route,
-apps/frontend/app/(default)/resumes/[id]/page.tsx,Frontend route,#935; #936; #937
+apps/frontend/app/(default)/resumes/[id]/page.tsx,Frontend route,#935; #936; #937; #973; #974
 apps/frontend/app/(default)/settings/page.tsx,Frontend route,
 apps/frontend/app/(default)/tailor/page.tsx,Frontend route,#948; #949; #950; #951; #973; #974
 apps/frontend/app/(default)/tracker/page.tsx,Frontend route,
@@ -222,7 +222,7 @@ apps/frontend/components/dashboard/master-resume-choice-dialog.tsx,Frontend comp
 apps/frontend/components/dashboard/resume-component.tsx,Frontend component,
 apps/frontend/components/dashboard/resume-upload-dialog.tsx,Frontend component,#939; #964; #965
 apps/frontend/components/enrichment/enrichment-modal.tsx,Frontend component,#973; #974
-apps/frontend/components/enrichment/loading-steps.tsx,Frontend component,
+apps/frontend/components/enrichment/loading-steps.tsx,Frontend component,#973; #974
 apps/frontend/components/enrichment/preview-step.tsx,Frontend component,#973; #974
 apps/frontend/components/enrichment/question-step.tsx,Frontend component,
 apps/frontend/components/home/hero.tsx,Frontend component,
@@ -245,15 +245,15 @@ apps/frontend/components/resume/resume-single-column.tsx,Frontend component,
 apps/frontend/components/resume/resume-two-column.tsx,Frontend component,
 apps/frontend/components/resume/resume-vivid.tsx,Frontend component,
 apps/frontend/components/resume/safe-html.tsx,Frontend component,
-apps/frontend/components/resume/styles/_base.module.css,Frontend component,
+apps/frontend/components/resume/styles/_base.module.css,Frontend component,#960; #961; #962
 apps/frontend/components/resume/styles/_tokens.css,Frontend component,
 apps/frontend/components/resume/styles/clean.module.css,Frontend component,
 apps/frontend/components/resume/styles/latex.module.css,Frontend component,
-apps/frontend/components/resume/styles/modern-two-column.module.css,Frontend component,
+apps/frontend/components/resume/styles/modern-two-column.module.css,Frontend component,#960; #961; #962
 apps/frontend/components/resume/styles/modern.module.css,Frontend component,
 apps/frontend/components/resume/styles/swiss-single.module.css,Frontend component,
-apps/frontend/components/resume/styles/swiss-two-column.module.css,Frontend component,
-apps/frontend/components/resume/styles/vivid.module.css,Frontend component,
+apps/frontend/components/resume/styles/swiss-two-column.module.css,Frontend component,#960; #961; #962
+apps/frontend/components/resume/styles/vivid.module.css,Frontend component,#960; #961; #962
 apps/frontend/components/settings/api-key-menu.tsx,Frontend component,
 apps/frontend/components/tailor/ats-score-card.tsx,Frontend component,
 apps/frontend/components/tailor/diff-preview-modal.tsx,Frontend component,
@@ -364,6 +364,7 @@ apps/frontend/tests/resume-latex.test.tsx,Frontend verification,
 apps/frontend/tests/resume-normalization.test.ts,Frontend verification,
 apps/frontend/tests/resume-upload-dialog.test.tsx,Frontend verification,#939; #964; #965
 apps/frontend/tests/resume-viewer-delete.test.tsx,Frontend verification,
+apps/frontend/tests/resume-viewer-enrichment-lifecycle.test.tsx,Frontend verification,#973; #974
 apps/frontend/tests/resume-viewer-errors.test.tsx,Frontend verification,#935; #936; #937
 apps/frontend/tests/resume-vivid.test.tsx,Frontend verification,
 apps/frontend/tests/resume-wizard-api.test.ts,Frontend verification,
@@ -437,7 +438,7 @@ docs/agent/architecture/backend-guide.md,Documentation,#952; #953; #954; #973; #
 docs/agent/architecture/frontend-architecture.md,Documentation,
 docs/agent/architecture/frontend-workflow.md,Documentation,#933; #934; #938; #966; #967; #968; #973; #974
 docs/agent/architecture/prompt-workflow-design.md,Documentation,
-docs/agent/architecture/reliability-file-inventory.csv,Documentation,
+docs/agent/architecture/reliability-file-inventory.csv,Documentation,#973; #974
 docs/agent/architecture/reliability-map.md,Documentation,#973; #974
 docs/agent/architecture/storage-transactions.md,Documentation,#955; #956; #957; #958
 docs/agent/coding-standards.md,Documentation,
@@ -456,10 +457,10 @@ docs/agent/features/i18n.md,Documentation,
 docs/agent/features/jd-match.md,Documentation,
 docs/agent/features/preview-confirmation.md,Documentation,#948; #949; #950; #951
 docs/agent/features/resume-templates.md,Documentation,
-docs/agent/llm-integration.md,Documentation,#940; #941; #943; #944; #945; #947; #969; #970; #975
+docs/agent/llm-integration.md,Documentation,#940; #941; #943; #944; #945; #947; #969; #970; #973; #974; #975
 docs/agent/quickstart.md,Documentation,
 docs/agent/scope-and-principles.md,Documentation,
-docs/agent/testing-strategy.md,Documentation,
+docs/agent/testing-strategy.md,Documentation,#973; #974
 docs/agent/workflow.md,Documentation,#939; #964; #965
 docs/portable/README.md,Documentation,
 docs/portable/nextjs-performance/01-waterfalls.md,Documentation,

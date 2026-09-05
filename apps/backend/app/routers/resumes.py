@@ -1280,6 +1280,8 @@ async def improve_resume_confirm_endpoint(
 
         try:
             original = _get_original_resume_data(resume)
+            if original is None:
+                raise ValueError("Original resume data is unavailable; process the source before preview")
             canonical = ResumeData.model_validate(finalize_ai_resume(original, improved_data)).model_dump()
             if canonical != improved_data:
                 raise ValueError("Registered preview no longer satisfies preservation rules")

@@ -646,3 +646,14 @@ async def test_legacy_registered_preview_cannot_persist_unsupported_additions(is
     response = await confirmation_client.post("/api/v1/resumes/improve/confirm", json=payload)
     assert response.status_code == 400, response.text
     assert len(await isolated_db.list_resumes()) == 1
+
+
+async def test_legacy_preview_without_structured_source_requires_reprocessing(isolated_db: Database, confirmation_client: AsyncClient, sample_resume: dict[str, Any]) -> None:
+    from app.preview import job_fingerprint, resume_fingerprint
+    source = await isolated_db.create_resume(content="# Original unprocessed resume", processing_status="failed")
+    job = await isolated_db.create_job("Synthetic engineer")
+    candidate = ResumeData.model_validate(sample_resume).model_dump()
+    preview = await isolated_db.register_preview(source_id=source["resume_id"], job_id=job["job_id"], payload_hash=resumes._hash_improved_data(candidate), source_hash=resume_fingerprint(source["content"], None, None), job_hash=job_fingerprint(job["content"]), prompt_id="nudge", ttl_seconds=60)
+    response = await confirmation_client.post("/api/v1/resumes/improve/confirm", json={"resume_id": source["resume_id"], "job_id": job["job_id"], "preview_id": preview["preview_id"], "improved_data": candidate, "improvements": []})
+    assert response.status_code == 400, response.text
+    assert len(await isolated_db.list_resumes()) == 1

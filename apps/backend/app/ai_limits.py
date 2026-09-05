@@ -11,6 +11,18 @@ MAX_PROMPT_CHARACTERS = 512_000
 MAX_ITEM_WORKERS = 4
 
 
+class PromptSizeError(ValueError):
+    """A rendered provider prompt exceeds the supported request size."""
+
+
+def validate_prompt_size(value: str) -> None:
+    """Reject a rendered prompt with a client-actionable exception type."""
+    if len(value) > MAX_PROMPT_CHARACTERS:
+        raise PromptSizeError(
+            f"AI prompt exceeds the {MAX_PROMPT_CHARACTERS}-character limit"
+        )
+
+
 def validate_source_size(value: Any, limit: int = MAX_SOURCE_CHARACTERS) -> None:
     """Validate JSON/text source size for schemas and service boundaries."""
     text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)

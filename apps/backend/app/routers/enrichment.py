@@ -10,8 +10,12 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 
-from app.ai_limits import MAX_ITEM_WORKERS, require_source_size
-from app.ai_budget import AIOperationRoute, remaining_timeout
+from app.ai_limits import MAX_ITEM_WORKERS, PromptSizeError, require_source_size
+from app.ai_budget import (
+    AIOperationDeadlineExceeded,
+    AIOperationRoute,
+    remaining_timeout,
+)
 from app.config_cache import get_content_language
 from app.database import db
 from app.llm import complete_json
@@ -210,6 +214,8 @@ async def analyze_resume(resume_id: str) -> AnalysisResponse:
             analysis_summary=result.get("analysis_summary"),
         )
 
+    except PromptSizeError:
+        raise
     except asyncio.TimeoutError:
         logger.error("Resume analysis timed out for resume %s", resume_id)
         raise HTTPException(
@@ -293,6 +299,8 @@ async def generate_enhancements(request: EnhanceRequest) -> EnhancementPreview:
                 timeout=remaining_timeout(),
             )
             analysis_result = _validate_analysis_result(analysis_result)
+        except PromptSizeError:
+            raise
         except asyncio.TimeoutError:
             logger.error("Resume re-analysis timed out for resume %s", request.resume_id)
             raise HTTPException(
@@ -305,6 +313,10 @@ async def generate_enhancements(request: EnhanceRequest) -> EnhancementPreview:
                 status_code=422,
                 detail="The AI returned an unreadable response. Please try again or switch models.",
             )
+        except AIOperationDeadlineExceeded:
+            raise
+        except (AIOperationDeadlineExceeded, PromptSizeError):
+            raise
         except Exception as e:
             logger.error("Failed to re-analyze resume: %s", e)
             raise HTTPException(
@@ -611,7 +623,10 @@ async def regenerate_items(request: RegenerateRequest) -> RegenerateResponse:
     errors: list[RegenerateItemError] = []
 
     for item, result in zip(request.items, results):
-        if isinstance(result, asyncio.CancelledError):
+        if isinstance(
+            result,
+            (asyncio.CancelledError, AIOperationDeadlineExceeded, PromptSizeError),
+        ):
             raise result
         if isinstance(result, Exception):
             logger.error(

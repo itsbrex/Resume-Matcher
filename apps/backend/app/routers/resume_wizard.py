@@ -7,7 +7,8 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 
-from app.ai_budget import AIOperationRoute
+from app.ai_budget import AIOperationDeadlineExceeded, AIOperationRoute
+from app.ai_limits import PromptSizeError
 from app.database import db
 from app.schemas.models import ResumeData, normalize_resume_data
 from app.schemas.resume_wizard import (
@@ -86,7 +87,7 @@ async def resume_wizard_turn(
         answer_text = request.answer.text if request.answer else ""
         state = await run_ai_turn(request.state, answer_text, skip=False)
         return ResumeWizardTurnResponse(state=state)
-    except HTTPException:
+    except (HTTPException, AIOperationDeadlineExceeded, PromptSizeError):
         raise
     except ValueError as e:
         logger.error("Resume wizard turn validation failed: %s", e)

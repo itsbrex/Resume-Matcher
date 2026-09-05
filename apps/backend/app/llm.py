@@ -13,7 +13,7 @@ from litellm import Router
 from litellm.router import RetryPolicy
 from pydantic import BaseModel
 
-from app.ai_limits import MAX_PROMPT_CHARACTERS, validate_source_size
+from app.ai_limits import validate_prompt_size
 from app.ai_budget import remaining_timeout
 from app.config import load_config_file, save_config_file, settings
 
@@ -972,7 +972,7 @@ async def complete(
 
     Transport retries (429, 500, timeout) are handled by the Router.
     """
-    validate_source_size(prompt + (system_prompt or ""), MAX_PROMPT_CHARACTERS)
+    validate_prompt_size(prompt + (system_prompt or ""))
     router, config = get_router(config)
     model_name = get_model_name(config)
 
@@ -1009,6 +1009,8 @@ async def complete(
         if not content:
             raise ValueError("Response contained no visible output")
         return content
+    except TimeoutError:
+        raise
     except Exception as e:
         # Log the actual error server-side for debugging
         logging.error(f"LLM completion failed: {e}", extra={
@@ -1519,7 +1521,7 @@ async def complete_json(
         response_validator: Optional synchronous schema/source validator. A
             ``ValueError`` rejects the content inside this retry budget.
     """
-    validate_source_size(prompt + (system_prompt or ""), MAX_PROMPT_CHARACTERS)
+    validate_prompt_size(prompt + (system_prompt or ""))
     router, config = get_router(config)
     model_name = get_model_name(config)
 

@@ -39,6 +39,14 @@ def _response(payload: object) -> litellm.ModelResponse:
     )
 
 
+@pytest.mark.parametrize("completion", [llm.complete, llm.complete_json])
+async def test_prompt_limit_uses_dedicated_exception(completion: Any) -> None:
+    from app.ai_limits import MAX_PROMPT_CHARACTERS, PromptSizeError
+
+    with pytest.raises(PromptSizeError, match="AI prompt exceeds"):
+        await completion("x" * (MAX_PROMPT_CHARACTERS + 1))
+
+
 @pytest.mark.parametrize(
     ("kind", "expected_calls"),
     [

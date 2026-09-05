@@ -118,6 +118,40 @@ def test_wizard_snapshot_bound() -> None:
         ResumeWizardState.model_validate({"resume_data": {"summary": "x" * 200001}})
 
 
+def test_wizard_warning_payload_is_bounded() -> None:
+    with pytest.raises(ValidationError):
+        ResumeWizardState.model_validate({"warnings": ["review"] * 101})
+
+
+async def test_prompt_limit_has_specific_api_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.ai_limits import MAX_PROMPT_CHARACTERS, PromptSizeError
+
+    async def oversized(*args: Any, **kwargs: Any) -> Any:
+        raise PromptSizeError(
+            f"AI prompt exceeds the {MAX_PROMPT_CHARACTERS}-character limit"
+        )
+
+    monkeypatch.setattr(resume_wizard, "run_ai_turn", oversized)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/v1/resume-wizard/turn",
+            json={
+                "state": {},
+                "action": "answer",
+                "answer": {"text": "Ada"},
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == (
+        f"AI prompt exceeds the {MAX_PROMPT_CHARACTERS}-character limit"
+    )
+
+
 async def test_regeneration_limits_active_workers_and_keeps_item_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -274,6 +308,52 @@ async def test_real_completion_wrapper_passes_declining_remaining_time(
         await asyncio.sleep(0.01)
         await llm.complete("Third", max_tokens=8192)
     assert 0 < timeouts[2] < timeouts[1] <= 0.2
+
+
+async def test_expired_completion_preserves_deadline_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app import llm
+    from app import ai_budget
+    from app.ai_budget import AIOperationDeadlineExceeded
+
+    config = llm.LLMConfig(provider="openai", model="gpt-4o", api_key="synthetic")
+    monkeypatch.setattr(
+        llm,
+        "get_router",
+        lambda _: (AsyncMock(), config),
+    )
+
+    token = ai_budget._deadline.set(asyncio.get_running_loop().time() - 1)
+    try:
+        with pytest.raises(AIOperationDeadlineExceeded):
+            await llm.complete("synthetic")
+    finally:
+        ai_budget._deadline.reset(token)
+
+
+async def test_auxiliary_timeout_keeps_completed_output_and_returns_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def title(*args: Any, **kwargs: Any) -> str:
+        return "Engineer"
+
+    async def slow_cover(*args: Any, **kwargs: Any) -> str:
+        await asyncio.sleep(1)
+        return "late"
+
+    monkeypatch.setattr(resumes, "generate_resume_title", title)
+    monkeypatch.setattr(resumes, "generate_cover_letter", slow_cover)
+    monkeypatch.setattr(resumes, "remaining_timeout", lambda: 0.02)
+
+    cover, outreach, title_value, interview, warnings = (
+        await resumes._generate_auxiliary_messages(
+            {}, "Engineer", "en", True, False, False
+        )
+    )
+
+    assert (cover, outreach, title_value, interview) == (None, None, "Engineer", None)
+    assert warnings == ["Cover Letter generation failed"]
 
 
 async def test_upload_deadline_cancels_conversion_before_persistence(

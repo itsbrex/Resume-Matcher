@@ -640,7 +640,20 @@ async def _generate_auxiliary_messages(
         )
         task_labels.append("interview_prep")
 
-    results = await asyncio.gather(*generation_tasks, return_exceptions=True)
+    # Finish optional work before the operation deadline so successful outputs
+    # can still be persisted if one provider call stalls. The remaining slice is
+    # reserved for the resume/improvement transaction.
+    generation_timeout = max(0.001, remaining_timeout() * 0.8)
+
+    async def bounded_generation(
+        generation: Awaitable[str | InterviewPrepData],
+    ) -> str | InterviewPrepData:
+        return await asyncio.wait_for(generation, timeout=generation_timeout)
+
+    results = await asyncio.gather(
+        *(bounded_generation(task) for task in generation_tasks),
+        return_exceptions=True,
+    )
     for label, result in zip(task_labels, results):
         if isinstance(result, Exception):
             logger.warning(

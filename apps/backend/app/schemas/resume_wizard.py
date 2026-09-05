@@ -73,7 +73,9 @@ class ResumeWizardState(BaseModel):
     )
     is_complete: bool = False
     progress: ResumeWizardProgress = Field(default_factory=ResumeWizardProgress)
-    warnings: list[str] = Field(default_factory=list)
+    warnings: list[Annotated[str, Field(max_length=2000)]] = Field(
+        default_factory=list, max_length=100
+    )
 
     @model_validator(mode="after")
     def _validate_source_budget(self) -> "ResumeWizardState":

@@ -301,6 +301,25 @@ async def test_ai_turn_missing_next_question_falls_back_to_gap() -> None:
     assert result.current_question.section == "education"
 
 
+async def test_ai_turn_defaults_optional_envelope_fields() -> None:
+    """A useful resume update survives omitted model hints."""
+    state = _state_on_section("workExperience")
+    minimal_result = {
+        "resume_data": _AI_EXPERIENCE_RESULT["resume_data"],
+    }
+    with patch(
+        "app.services.resume_wizard.complete_json",
+        new_callable=AsyncMock,
+        return_value=minimal_result,
+    ):
+        result = await run_ai_turn(state, "engineer at Acme", skip=False)
+
+    assert result.resume_data.workExperience[0].company == "Acme"
+    assert result.current_question.section == "education"
+    assert result.inferred_skills == []
+    assert result.is_complete is False
+
+
 @pytest.mark.parametrize(
     "malformed_result",
     [

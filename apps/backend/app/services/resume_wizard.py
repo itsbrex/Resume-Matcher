@@ -6,7 +6,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, StrictBool, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError
 
 from app.config_cache import get_content_language
 from app.llm import _scrub_secrets, complete_json
@@ -49,9 +49,9 @@ class _ResumeWizardAIEnvelope(BaseModel):
     model_config = ConfigDict(strict=True)
 
     resume_data: dict[str, Any]
-    next_question: dict[str, Any] | None
-    inferred_skills: list[str]
-    is_complete: StrictBool
+    next_question: dict[str, Any] | None = None
+    inferred_skills: list[str] = Field(default_factory=list)
+    is_complete: StrictBool = False
 
 # The keyword ("my name", "name") may be lower- or upper-cased, but the captured
 # name must start uppercase — so we case the keyword explicitly with [Mm]/[Nn]

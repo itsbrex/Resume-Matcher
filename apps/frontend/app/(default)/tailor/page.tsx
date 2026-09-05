@@ -158,6 +158,10 @@ export default function TailorPage() {
   const confirmAndNavigate = async (result: ImprovedResult, token: number) => {
     let confirmed = confirmedResponses.current.get(result);
     if (!confirmed) {
+      const expiresAt = Date.parse(result.data.preview_expires_at ?? '');
+      if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
+        throw new Error('Preview expired');
+      }
       confirmed = await confirmImproveResume(buildConfirmPayload(result));
       // Acknowledgement is durable even if a later client effect fails.
       confirmedResponses.current.set(result, confirmed);
@@ -171,6 +175,25 @@ export default function TailorPage() {
     }
     setImprovedData(confirmed);
     router.push(newResumeId ? `/resumes/${newResumeId}` : '/builder');
+  };
+
+  const offerFreshPreview = (failure: unknown): boolean => {
+    if (!(failure instanceof Error) || !/preview expired|status (400|409)\b/i.test(failure.message))
+      return false;
+    invalidate();
+    confirmationBusy.current = false;
+    missingDiffConfirmInFlight.current = false;
+    setIsConfirming(false);
+    setIsLoading(false);
+    setShowDiffModal(false);
+    setShowMissingDiffDialog(false);
+    setPendingResult(null);
+    setMissingDiffResult(null);
+    setDiffConfirmError(null);
+    setMissingDiffError(null);
+    setError(t('tailor.errors.previewUnavailable'));
+    setShowRegenerateDialog(true);
+    return true;
   };
 
   const getGenerateValidationError = (trimmedDescription: string) => {
@@ -259,6 +282,7 @@ export default function TailorPage() {
     } catch (err) {
       if (!isCurrent(token)) return;
       console.error(err);
+      if (offerFreshPreview(err)) return;
       const errorMessage = t('tailor.errors.failedToConfirm');
       setError(errorMessage);
       setDiffConfirmError(errorMessage);
@@ -316,6 +340,7 @@ export default function TailorPage() {
     } catch (err) {
       if (!isCurrent(token)) return;
       console.error(err);
+      if (offerFreshPreview(err)) return;
       const errorMessage = t('tailor.errors.failedToConfirm');
       setError(errorMessage);
       setMissingDiffError(errorMessage);

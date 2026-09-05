@@ -632,7 +632,8 @@
       "timeout": "A prévia do currículo expirou após {minutes} minutos. Tente novamente com uma descrição de vaga mais curta ou um prompt mais simples.",
       "failedToGenerate": "Não foi possível gerar o currículo. Verifique sua chave de API em Configurações e tente novamente.",
       "failedToPreview": "Não foi possível pré-visualizar o currículo. Verifique sua chave de API em Configurações e tente novamente.",
-      "failedToConfirm": "Não foi possível aplicar as alterações. Tente novamente."
+      "failedToConfirm": "Não foi possível aplicar as alterações. Tente novamente.",
+      "previewUnavailable": "Esta prévia expirou ou o currículo original mudou. Gere uma nova prévia antes de salvar."
     }
   },
   "settings": {

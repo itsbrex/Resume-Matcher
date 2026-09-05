@@ -216,3 +216,35 @@ it('keeps missing-diff confirmation open while its durable request is pending', 
   expect(api.resumes).toHaveBeenCalledTimes(1);
   expect(api.push).toHaveBeenLastCalledWith('/resumes/tailored');
 });
+
+it.each(['expired locally', 'rejected by server'])(
+  'offers a fresh preview when confirmation is %s',
+  async (mode) => {
+    api.preview.mockResolvedValue({
+      ...preview,
+      data: {
+        ...preview.data,
+        preview_expires_at: mode === 'expired locally' ? '2000-01-01T00:00:00Z' : null,
+      },
+    });
+    if (mode === 'rejected by server')
+      api.confirm.mockRejectedValueOnce(
+        new Error('Improve failed with status 409: Preview expired')
+      );
+    render(<TailorPage />);
+    await act(async () => {});
+    await generate();
+    await act(async () => screen.getByRole('button', { name: 'Confirm preview' }).click());
+    expect(screen.getByText('tailor.errors.previewUnavailable')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'tailor.regenerateDialog.confirmLabel' })
+    ).toBeVisible();
+    if (mode === 'expired locally') expect(api.confirm).not.toHaveBeenCalled();
+    api.preview.mockResolvedValue(preview);
+    await act(async () =>
+      screen.getByRole('button', { name: 'tailor.regenerateDialog.confirmLabel' }).click()
+    );
+    expect(api.preview).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('button', { name: 'Confirm preview' })).toBeEnabled();
+  }
+);

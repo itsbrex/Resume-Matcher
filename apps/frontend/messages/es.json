@@ -632,7 +632,8 @@
       "timeout": "La vista previa del currículum agotó el tiempo de espera tras {minutes} minutos. Inténtalo de nuevo con una descripción del trabajo más corta o un prompt más simple.",
       "failedToGenerate": "No se pudo generar el currículum. Revisa tu clave API en Configuración e inténtalo de nuevo.",
       "failedToPreview": "No se pudo previsualizar el currículum. Revisa tu clave API en Configuración e inténtalo de nuevo.",
-      "failedToConfirm": "No se pudieron aplicar los cambios. Inténtalo de nuevo."
+      "failedToConfirm": "No se pudieron aplicar los cambios. Inténtalo de nuevo.",
+      "previewUnavailable": "La vista previa caducó o el currículum original cambió. Genera una nueva vista previa antes de guardar."
     }
   },
   "settings": {

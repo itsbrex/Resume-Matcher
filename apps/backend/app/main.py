@@ -5,7 +5,8 @@ import logging
 import sys
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 # Fix for Windows: Use ProactorEventLoop for subprocess support (Playwright)
 if sys.platform == "win32":
@@ -16,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
 from app.config import settings
-from app.database import db
+from app.database import DatabaseBusyError, db
 from app.pdf import close_pdf_renderer, init_pdf_renderer
 from app.routers import (
     applications_router,
@@ -76,6 +77,12 @@ app = FastAPI(
     version=__version__,
     lifespan=lifespan,
 )
+
+@app.exception_handler(DatabaseBusyError)
+async def database_busy_handler(request: Request, error: DatabaseBusyError) -> JSONResponse:
+    logger.warning("Database write contention for %s", request.url.path, exc_info=error)
+    return JSONResponse(status_code=503, content={"detail": "Database is busy. Please retry shortly."}, headers={"Retry-After": "1"})
+
 
 # CORS middleware - origins configurable via CORS_ORIGINS env var
 app.add_middleware(

@@ -16,7 +16,7 @@ from fastapi.responses import Response
 from pydantic import ValidationError
 
 from app.config_cache import get_content_language, load_config as _load_config
-from app.database import ProcessingFinishOutcome, ResumeNotFoundError, db
+from app.database import DatabaseBusyError, ProcessingFinishOutcome, ResumeNotFoundError, db
 from app.pdf import render_resume_pdf, PDFRenderError
 from app.config import settings
 
@@ -102,6 +102,8 @@ async def _auto_create_tracker_application(
             company=company,
             role=role,
         )
+    except DatabaseBusyError:
+        raise
     except Exception as e:  # noqa: BLE001 - tracker is non-critical
         logger.warning("Failed to auto-create tracker application: %s", e)
 
@@ -503,6 +505,8 @@ def _build_ats_score(
             injectable_keywords=ats_raw["injectable_keywords"],
             recommendations=ats_raw["recommendations"],
         )
+    except DatabaseBusyError:
+        raise
     except Exception as e:
         logger.warning("ATS score computation failed", exc_info=True)
         return None
@@ -525,6 +529,8 @@ def _calculate_diff_from_resume(
     try:
         summary, changes = calculate_resume_diff(original_data, improved_data)
         return summary, changes, None
+    except DatabaseBusyError:
+        raise
     except Exception as e:
         logger.warning("Skipping resume diff due to calculation failure: %s", e)
         return None, None, f"calculation_error: {str(e)}"
@@ -725,6 +731,8 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
             status_code=504,
             detail="Document conversion timed out. Please try a simpler document.",
         ) from e
+    except DatabaseBusyError:
+        raise
     except Exception as e:
         logger.exception("Document parsing failed")
         raise HTTPException(
@@ -770,6 +778,8 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
     # Try to parse to structured JSON (optional, may fail if LLM not configured)
     try:
         processed_data = await parse_resume_to_json(markdown_content)
+    except DatabaseBusyError:
+        raise
     except Exception as e:
         logger.warning(f"Resume parsing to JSON failed for {file.filename}: {e}")
         outcome = await db.finish_resume_processing(
@@ -938,6 +948,8 @@ async def improve_resume_preview_endpoint(
                 "job description or a simpler prompt."
             ),
         )
+    except DatabaseBusyError:
+        raise
     except Exception as e:
         _raise_improve_error("preview", stage, e, detail)
 
@@ -982,6 +994,8 @@ async def _improve_preview_flow(
                     "Failed to persist job keywords for job %s.",
                     request.job_id,
                 )
+        except DatabaseBusyError:
+            raise
         except Exception as e:
             logger.warning(
                 "Failed to persist job keywords for job %s: %s",
@@ -1018,6 +1032,8 @@ async def _improve_preview_flow(
                 response_warnings.append(
                     f"{len(rejected_targets)} unsupported skill target(s) rejected"
                 )
+        except DatabaseBusyError:
+            raise
         except Exception as e:
             logger.warning("Skill target planning failed, continuing without it: %s", e)
             response_warnings.append("Skill target planning failed")
@@ -1134,6 +1150,8 @@ async def _improve_preview_flow(
                 refinement_result.passes_completed,
                 len(refinement_result.ai_phrases_removed),
             )
+    except DatabaseBusyError:
+        raise
     except Exception as e:
         logger.warning("Refinement failed, using unrefined result: %s", e)
         if refinement_attempted:
@@ -1351,6 +1369,8 @@ async def improve_resume_confirm_endpoint(
         )
     except HTTPException:
         raise
+    except DatabaseBusyError:
+        raise
     except Exception as e:
         _raise_improve_error("confirm", stage, e, detail)
 
@@ -1508,6 +1528,8 @@ async def improve_resume_endpoint(
                     refinement_result.passes_completed,
                     len(refinement_result.ai_phrases_removed),
                 )
+        except DatabaseBusyError:
+            raise
         except Exception as e:
             logger.warning("Refinement failed, using unrefined result: %s", e)
             if refinement_attempted:
@@ -1610,6 +1632,10 @@ async def improve_resume_endpoint(
                 refinement_successful=refinement_successful,
             ),
         )
+
+    except DatabaseBusyError:
+
+        raise
 
     except Exception as e:
         logger.error(f"Resume improvement failed: {e}")
@@ -1816,6 +1842,8 @@ async def retry_processing(resume_id: str) -> ResumeUploadResponse:
 
     try:
         processed_data = await parse_resume_to_json(markdown_content)
+    except DatabaseBusyError:
+        raise
     except Exception as e:
         logger.warning(f"Retry processing failed for resume {resume_id}: {e}")
         outcome = await db.finish_resume_processing(
@@ -1949,6 +1977,8 @@ async def generate_cover_letter_endpoint(resume_id: str) -> GenerateContentRespo
         cover_letter_content = await generate_cover_letter(
             resume_data, job["content"], language
         )
+    except DatabaseBusyError:
+        raise
     except Exception as e:
         logger.error(f"Cover letter generation failed: {e}")
         raise HTTPException(
@@ -2020,6 +2050,8 @@ async def generate_outreach_endpoint(resume_id: str) -> GenerateContentResponse:
         outreach_content = await generate_outreach_message(
             resume_data, job["content"], language
         )
+    except DatabaseBusyError:
+        raise
     except Exception as e:
         logger.error(f"Outreach message generation failed: {e}")
         raise HTTPException(
@@ -2085,6 +2117,8 @@ async def generate_interview_prep_endpoint(
             job["content"],
             language,
         )
+    except DatabaseBusyError:
+        raise
     except Exception as e:
         logger.exception("Interview preparation generation failed: %s", e)
         raise HTTPException(

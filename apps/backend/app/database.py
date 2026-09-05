@@ -12,6 +12,7 @@ Two engines back one SQLite file:
 
 import logging
 import shutil
+import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -20,7 +21,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from sqlalchemy import and_, delete, func, or_, select, text, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -45,6 +46,10 @@ APPLICATION_STATUSES: tuple[str, ...] = (
     "rejected",
 )
 ProcessingFinishOutcome = Literal["committed", "stale", "missing"]
+
+
+class DatabaseBusyError(RuntimeError):
+    """A write reservation could not be obtained; retry the unchanged request."""
 
 
 class ResumeNotFoundError(ValueError):
@@ -116,8 +121,14 @@ class Database:
         the session rolls back every change if any stage raises.
         """
         async with self._session() as session:
-            await session.execute(text("BEGIN IMMEDIATE"))
-            yield session
+            try:
+                await session.execute(text("BEGIN IMMEDIATE"))
+                yield session
+            except OperationalError as error:
+                code = getattr(error.orig, "sqlite_errorcode", None)
+                if isinstance(code, int) and code & 0xFF in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                    raise DatabaseBusyError("Database is busy") from error
+                raise
 
     @property
     def _sync(self) -> sessionmaker[Session]:
@@ -603,6 +614,14 @@ class Database:
         If a card for the same job+resume already exists it is returned as-is
         (survives double-submit / retried confirms).
         """
+        # A replay needs only a read. Recheck under the reservation before an
+        # insert so concurrent new cards still share the position allocation.
+        async with self._session() as session:
+            found = await session.scalar(select(Application).where(
+                Application.job_id == job_id, Application.resume_id == resume_id
+            ))
+            if found is not None:
+                return self._application_to_dict(found)
         async with self._write_session() as session:
             existing = await session.execute(
                 select(Application).where(

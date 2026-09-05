@@ -293,3 +293,29 @@ async def test_cleared_dates_remain_empty_until_a_new_saved_to_applied_transitio
         row_id, {"status": "applied", "applied_at": None}
     )
     assert explicit_clear is not None and explicit_clear["applied_at"] is None
+
+
+def test_status_openapi_excludes_null_but_allows_omission() -> None:
+    from app.schemas.applications import ApplicationUpdate
+    schema = ApplicationUpdate.model_json_schema()
+    assert {"type": "null"} not in schema["properties"]["status"].get("anyOf", [])
+    assert "status" not in schema.get("required", [])
+    assert ApplicationUpdate().model_dump(exclude_unset=True) == {}
+
+
+async def test_sqlite_contention_is_retryable_503(isolated_db: Database) -> None:
+    card = await isolated_db.create_application(job_id="job", resume_id="resume")
+    async with isolated_db._write_session():
+        async with AsyncClient(transport=ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test") as client:
+            response = await client.patch(f"/api/v1/applications/{card['application_id']}", json={"notes": "changed"})
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "1"
+    stored = await isolated_db.get_application(card["application_id"])
+    assert stored is not None and stored["notes"] is None
+
+
+async def test_existing_tracker_card_does_not_wait_for_writer(isolated_db: Database) -> None:
+    card = await isolated_db.create_application(job_id="job", resume_id="resume")
+    async with isolated_db._write_session():
+        duplicate = await asyncio.wait_for(isolated_db.create_application(job_id="job", resume_id="resume"), 0.2)
+    assert duplicate == card

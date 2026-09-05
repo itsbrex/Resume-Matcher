@@ -4,6 +4,7 @@ from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
+from pydantic.json_schema import SkipJsonSchema
 
 
 class ApplicationStatus(str, Enum):
@@ -75,7 +76,7 @@ class ManualApplicationCreate(BaseModel):
 class ApplicationUpdate(BaseModel):
     """Partial update — every field optional."""
 
-    status: ApplicationStatus | None = None
+    status: ApplicationStatus | SkipJsonSchema[None] = None
     position: int | None = None
     notes: str | None = None
     company: str | None = None

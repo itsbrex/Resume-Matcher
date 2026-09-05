@@ -59,9 +59,30 @@ function stringList(value: unknown): string[] {
     .filter(Boolean);
 }
 
-function descriptionRows(value: unknown): string[] {
-  if (typeof value === 'string') return value.trim() ? [value.trim()] : [];
-  return stringList(value);
+function descriptionRows(
+  value: unknown,
+  styles: unknown
+): { description: string[]; descriptionStyles: ('plain' | 'bullet')[] } {
+  const rows = typeof value === 'string' ? [value] : Array.isArray(value) ? value : [];
+  const rawStyles = Array.isArray(styles) ? styles : [];
+  const paired = rows.flatMap((row, index) =>
+    typeof row === 'string' && row.trim()
+      ? [
+          {
+            text: row.trim(),
+            style: rawStyles[index] === 'plain' ? ('plain' as const) : ('bullet' as const),
+          },
+        ]
+      : []
+  );
+  return {
+    description: paired.map((row) => row.text),
+    descriptionStyles: paired.map((row) => row.style),
+  };
+}
+
+function yearsValue(value: unknown): string {
+  return typeof value === 'number' && Number.isFinite(value) ? String(value) : stringValue(value);
 }
 
 function integerInRange(
@@ -76,18 +97,14 @@ function integerInRange(
 
 function normalizeExperience(value: unknown, index: number): Experience | null {
   if (!isRecord(value)) return null;
-  const description = descriptionRows(value.description);
-  const rawStyles = Array.isArray(value.descriptionStyles) ? value.descriptionStyles : [];
+  const descriptions = descriptionRows(value.description, value.descriptionStyles);
   return {
     id: index + 1,
     title: stringValue(value.title),
     company: stringValue(value.company),
     location: optionalString(value.location),
-    years: stringValue(value.years),
-    description,
-    descriptionStyles: description.map((_, rowIndex) =>
-      rawStyles[rowIndex] === 'plain' ? 'plain' : 'bullet'
-    ),
+    years: yearsValue(value.years),
+    ...descriptions,
   };
 }
 
@@ -97,43 +114,35 @@ function normalizeEducation(value: unknown, index: number): Education | null {
     id: index + 1,
     institution: stringValue(value.institution),
     degree: stringValue(value.degree),
-    years: stringValue(value.years),
+    years: yearsValue(value.years),
     description: optionalString(value.description),
   };
 }
 
 function normalizeProject(value: unknown, index: number): Project | null {
   if (!isRecord(value)) return null;
-  const description = descriptionRows(value.description);
-  const rawStyles = Array.isArray(value.descriptionStyles) ? value.descriptionStyles : [];
+  const descriptions = descriptionRows(value.description, value.descriptionStyles);
   return {
     id: index + 1,
     name: stringValue(value.name),
     role: stringValue(value.role),
-    years: stringValue(value.years),
+    years: yearsValue(value.years),
     github: optionalString(value.github),
     website: optionalString(value.website),
-    description,
-    descriptionStyles: description.map((_, rowIndex) =>
-      rawStyles[rowIndex] === 'plain' ? 'plain' : 'bullet'
-    ),
+    ...descriptions,
   };
 }
 
 function normalizeCustomItem(value: unknown, index: number): CustomSectionItem | null {
   if (!isRecord(value)) return null;
-  const description = descriptionRows(value.description);
-  const rawStyles = Array.isArray(value.descriptionStyles) ? value.descriptionStyles : [];
+  const descriptions = descriptionRows(value.description, value.descriptionStyles);
   return {
     id: index + 1,
     title: optionalString(value.title),
     subtitle: optionalString(value.subtitle),
     location: optionalString(value.location),
-    years: optionalString(value.years),
-    description,
-    descriptionStyles: description.map((_, rowIndex) =>
-      rawStyles[rowIndex] === 'plain' ? 'plain' : 'bullet'
-    ),
+    years: yearsValue(value.years) || undefined,
+    ...descriptions,
   };
 }
 
@@ -286,7 +295,12 @@ function normalizeState(value: unknown): ResumeWizardState | null {
     is_complete: value.is_complete === true,
     progress: {
       current: isRecord(value.progress)
-        ? integerInRange(value.progress.current, Math.min(askedCount, total), 0, total)
+        ? integerInRange(
+            value.progress.current,
+            Math.min(askedCount, total),
+            0,
+            Math.min(askedCount, total)
+          )
         : Math.min(askedCount, total),
       total,
     },

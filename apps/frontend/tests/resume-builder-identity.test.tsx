@@ -396,3 +396,21 @@ it.each(['legacy pending', 'partial raw JSON'])('loads a usable %s baseline', as
   );
   expect(screen.queryByRole('alert')).toBeNull();
 });
+
+it('does not claim a restored backup if its source disappeared and the scoped write fails', async () => {
+  setDraft('res-1', { ...REAL_RESUME, summary: 'RECOVERED' });
+  fetchResume.mockResolvedValue({ processed_resume: REAL_RESUME });
+  updateResume.mockRejectedValue(new Error('offline'));
+  const Builder = await importBuilder();
+  render(<Builder />);
+  await tick(0);
+  localStorage.removeItem('resume_builder_draft:res-1');
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new Error('quota');
+  });
+  await act(async () =>
+    screen.getByRole('button', { name: 'builder.draftRecovery.restoreDraft' }).click()
+  );
+  expect(screen.queryByText('builder.autoSave.localDraft')).not.toBeInTheDocument();
+  expect(screen.getByTestId('summary')).toHaveTextContent('RECOVERED');
+});

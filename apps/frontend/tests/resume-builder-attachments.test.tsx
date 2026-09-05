@@ -375,6 +375,7 @@ describe('builder attachment persistence', () => {
       fireEvent.change(input, { target: { value: 'UNSAVED OUTREACH' } });
       await act(async () => screen.getByRole('button', { name: 'nav.backToDashboard' }).click());
       expect(screen.getByText('builder.leaveWithoutDraft.description')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('UNSAVED OUTREACH')).toBeInTheDocument();
       expect(screen.queryByText('builder.leaveWithLocalDraft.description')).not.toBeInTheDocument();
       expect(push).not.toHaveBeenCalled();
     } finally {
@@ -554,4 +555,32 @@ describe.each(['cover-letter', 'outreach'] as const)('%s save queued during gene
       expect(unload.defaultPrevented).toBe(false);
     }
   );
+});
+
+it('retains a matching restored attachment backup when replacement storage writes fail', async () => {
+  localStorage.setItem(
+    'resume_builder_attachment_draft:a',
+    JSON.stringify({
+      resumeId: 'a',
+      updatedAt: Date.now(),
+      coverLetter: 'RECOVERABLE',
+      outreachMessage: '',
+    })
+  );
+  fetchResume.mockResolvedValue(response({ cover_letter: 'SERVER' }));
+  updateCoverLetter.mockRejectedValue(new Error('offline'));
+  const Builder = await importBuilder();
+  render(<Builder />);
+  await screen.findByDisplayValue('SERVER');
+  const storage = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new Error('quota');
+  });
+  try {
+    fireEvent.click(screen.getByRole('button', { name: 'builder.draftRecovery.restoreDraft' }));
+    await act(async () => screen.getByRole('button', { name: 'nav.backToDashboard' }).click());
+    expect(screen.getByText('builder.leaveWithLocalDraft.description')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('RECOVERABLE')).toBeInTheDocument();
+  } finally {
+    storage.mockRestore();
+  }
 });

@@ -224,7 +224,7 @@ export function ResumeWizardPage() {
             </section>
           ) : (
             <QuestionCard
-              step={state.step}
+              step={state.step === 'complete' ? 'review' : state.step}
               question={state.current_question.text}
               sectionLabel={sectionLabel}
               progress={state.progress}

@@ -879,7 +879,11 @@ const ResumeBuilderContent = () => {
     setHasUnsavedChanges(true);
     setAutoSaveError(null);
     const didWriteScopedDraft = writeStoredResumeDraft(resumeId, pendingDraftRestore.data);
-    setHasCurrentLocalDraft(true);
+    setHasCurrentLocalDraft(
+      didWriteScopedDraft ||
+        JSON.stringify(readStoredResumeDraft(resumeId)?.data) ===
+          JSON.stringify(pendingDraftRestore.data)
+    );
     if (
       didWriteScopedDraft &&
       pendingDraftRestore.storageKey !== getResumeDraftStorageKey(resumeId)
@@ -922,8 +926,15 @@ const ResumeBuilderContent = () => {
       setHasCurrentAttachmentDraft(false);
       return;
     }
+    const didWrite = writeAttachmentDraft(resumeId, values.coverLetter, values.outreachMessage);
+    const existing = didWrite ? null : readAttachmentDraft(resumeId);
     setHasCurrentAttachmentDraft(
-      writeAttachmentDraft(resumeId, values.coverLetter, values.outreachMessage)
+      didWrite ||
+        Boolean(
+          existing &&
+          existing.coverLetter === values.coverLetter &&
+          existing.outreachMessage === values.outreachMessage
+        )
     );
   };
 

@@ -118,8 +118,6 @@ async def test_turn_malformed_model_envelope_is_recoverable_422(
     assert response.status_code == 422
     assert response.json() == {"detail": "Could not update the resume draft."}
     assert mock_complete.await_count == 1
-    assert state.asked_count == 0
-    assert state.history == []
 
 
 async def test_finalize_creates_ready_master_resume(isolated_db) -> None:

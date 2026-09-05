@@ -184,6 +184,7 @@ def _merge_entries[T: _IdentifiedEntry](
     existing: list[T],
     updated: list[T],
     key: Callable[[T], tuple[str, ...]],
+    raw_updated: object,
 ) -> list[T]:
     """Merge echoed entries by stable id, appending entries declared as new.
 
@@ -191,7 +192,9 @@ def _merge_entries[T: _IdentifiedEntry](
     instead of the full list) must NOT erase earlier entries. So: existing
     entries the model omits are kept, entries retaining a known positive id are
     replaced in place, and entries without a known id are appended. The content
-    signature remains only as compatibility for unchanged echoes that omit ids.
+    signature remains only as compatibility for echoes that genuinely omit ids.
+    Raw field presence must survive schema defaults because an explicit ``id: 0``
+    is add intent even when a new entry shares the same content signature.
     """
     result = list(existing)
     id_index: dict[int, int] = {}
@@ -200,9 +203,12 @@ def _merge_entries[T: _IdentifiedEntry](
         if item.id > 0:
             id_index.setdefault(item.id, position)
         signature_index.setdefault(key(item), position)
-    for item in updated:
+    raw_items = raw_updated if isinstance(raw_updated, list) else []
+    for item_index, item in enumerate(updated):
+        raw_item = raw_items[item_index] if item_index < len(raw_items) else None
+        has_explicit_id = isinstance(raw_item, dict) and "id" in raw_item
         position = id_index.get(item.id) if item.id > 0 else None
-        if position is None and item.id <= 0:
+        if position is None and item.id <= 0 and not has_explicit_id:
             position = signature_index.get(key(item))
         if position is not None:
             item.id = result[position].id
@@ -268,21 +274,30 @@ def _merge_section(
     if section in {"workExperience", "internships"}:
         if "workExperience" in raw_updated:
             merged.workExperience = _merge_entries(
-                merged.workExperience, updated.workExperience, _experience_key
+                merged.workExperience,
+                updated.workExperience,
+                _experience_key,
+                raw_updated.get("workExperience"),
             )
         return merged
 
     if section == "education":
         if "education" in raw_updated:
             merged.education = _merge_entries(
-                merged.education, updated.education, _education_key
+                merged.education,
+                updated.education,
+                _education_key,
+                raw_updated.get("education"),
             )
         return merged
 
     if section == "personalProjects":
         if "personalProjects" in raw_updated:
             merged.personalProjects = _merge_entries(
-                merged.personalProjects, updated.personalProjects, _project_key
+                merged.personalProjects,
+                updated.personalProjects,
+                _project_key,
+                raw_updated.get("personalProjects"),
             )
         return merged
 

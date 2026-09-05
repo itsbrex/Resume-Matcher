@@ -634,6 +634,83 @@ async def test_ai_turn_appends_explicit_new_entry_without_reassigning_existing_i
     ]
 
 
+async def test_ai_turn_appends_explicit_zero_id_even_when_signature_matches() -> None:
+    """An explicit zero is add intent even if identity-like fields are identical."""
+    state = _state_on_section("workExperience")
+    existing = {
+        **_ACME_ROLE,
+        "id": 7,
+        "description": ["First engagement"],
+    }
+    state.resume_data = ResumeData.model_validate({"workExperience": [existing]})
+    addition = {
+        "resume_data": {
+            "workExperience": [
+                {
+                    **_ACME_ROLE,
+                    "id": 0,
+                    "description": ["Separate engagement"],
+                }
+            ]
+        },
+        "next_question": {"text": "More roles?", "section": "workExperience"},
+        "inferred_skills": [],
+        "is_complete": False,
+    }
+
+    with patch(
+        "app.services.resume_wizard.complete_json",
+        new_callable=AsyncMock,
+        return_value=addition,
+    ):
+        result = await run_ai_turn(state, "This was a separate engagement", skip=False)
+
+    assert [entry.id for entry in result.resume_data.workExperience] == [7, 8]
+    assert [entry.description for entry in result.resume_data.workExperience] == [
+        ["First engagement"],
+        ["Separate engagement"],
+    ]
+
+
+async def test_ai_turn_signature_matches_legacy_echo_with_omitted_id() -> None:
+    """An omitted ID retains compatibility matching for older model replies."""
+    state = _state_on_section("workExperience")
+    existing = {
+        **_ACME_ROLE,
+        "id": 7,
+        "description": ["Original wording"],
+    }
+    state.resume_data = ResumeData.model_validate({"workExperience": [existing]})
+    legacy_echo = {
+        "resume_data": {
+            "workExperience": [
+                {
+                    key: value
+                    for key, value in {
+                        **_ACME_ROLE,
+                        "description": ["Updated wording"],
+                    }.items()
+                    if key != "id"
+                }
+            ]
+        },
+        "next_question": {"text": "More roles?", "section": "workExperience"},
+        "inferred_skills": [],
+        "is_complete": False,
+    }
+
+    with patch(
+        "app.services.resume_wizard.complete_json",
+        new_callable=AsyncMock,
+        return_value=legacy_echo,
+    ):
+        result = await run_ai_turn(state, "Please improve the wording", skip=False)
+
+    assert len(result.resume_data.workExperience) == 1
+    assert result.resume_data.workExperience[0].id == 7
+    assert result.resume_data.workExperience[0].description == ["Updated wording"]
+
+
 async def test_ai_turn_tells_provider_how_entry_ids_encode_edit_and_add_intent() -> None:
     state = _state_on_section("workExperience")
     state.resume_data = ResumeData.model_validate(

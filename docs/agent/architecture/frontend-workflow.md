@@ -17,7 +17,7 @@ Dashboard → Upload Master Resume → Tailor for Job → View/Edit → Download
 - **Create:** "+" card opens `/tailor`
 - Auto-refreshes on window focus
 - List and status results are applied only while their request and master identity are current. Late responses cannot replace newer cards or clear a different master.
-- Pending/processing master status is polled every three seconds after the preceding status request completes. Polling stops on ready/failed, missing master, or unmount; focus refresh and Retry provide recovery after a failure.
+- Pending/processing master status is polled serially with a 3–30 second backoff, for at most 12 polls. Hidden tabs skip polling. Polling stops on ready/failed, missing master, or unmount; focus refresh and Retry provide recovery after a failure.
 
 ### 2. Resume Viewer (`/resumes/[id]`)
 

@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import Dashboard from '@/app/(default)/dashboard/page';
 import type { fetchResume, ResumeListItem } from '@/lib/api/resume';
 
-const api = vi.hoisted(() => ({ list: vi.fn(), get: vi.fn(), push: vi.fn() }));
+const api = vi.hoisted(() => ({ list: vi.fn(), get: vi.fn(), retry: vi.fn(), push: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: api.push }) }));
 vi.mock('@/lib/i18n', () => ({
   useTranslations: () => ({
@@ -25,10 +25,14 @@ vi.mock('@/lib/api/resume', () => ({
   fetchResumeList: (...args: unknown[]) => api.list(...args),
   fetchResume: (...args: unknown[]) => api.get(...args),
   deleteResume: vi.fn(),
-  retryProcessing: vi.fn(),
+  retryProcessing: (...args: unknown[]) => api.retry(...args),
   fetchJobDescription: vi.fn().mockResolvedValue(null),
 }));
-vi.mock('@/components/dashboard/resume-upload-dialog', () => ({ ResumeUploadDialog: () => null }));
+vi.mock('@/components/dashboard/resume-upload-dialog', () => ({
+  ResumeUploadDialog: ({ onUploadComplete }: { onUploadComplete: (id: string) => void }) => (
+    <button onClick={() => onUploadComplete('uploaded')}>finish upload</button>
+  ),
+}));
 vi.mock('@/components/dashboard/master-resume-choice-dialog', () => ({
   MasterResumeChoiceDialog: () => null,
 }));
@@ -171,5 +175,78 @@ describe('dashboard refresh ownership', () => {
     expect(api.get.mock.calls.filter(([id]) => id === 'old')).toHaveLength(1);
     expect(screen.getByText('dashboard.statusLine:dashboard.status.ready')).toBeInTheDocument();
     timers.mockRestore();
+  });
+  it('keeps a pending retry owned across focus refreshes', async () => {
+    const pending = deferred<unknown>();
+    api.list.mockResolvedValue([row('master', true)]);
+    api.get.mockResolvedValue(status('failed'));
+    api.retry.mockReturnValue(pending.promise);
+    render(<Dashboard />);
+    await act(async () => {});
+    fireEvent.click(screen.getAllByRole('button', { name: 'dashboard.retryProcessing' })[0]);
+    fireEvent.focus(window);
+    await act(async () => {});
+    expect(
+      screen
+        .queryAllByRole('button', { name: 'dashboard.retryProcessing' })
+        .every((button) => button.hasAttribute('disabled'))
+    ).toBe(true);
+    await act(async () => pending.resolve({ processing_status: 'ready' }));
+    expect(screen.getByText('dashboard.statusLine:dashboard.status.ready')).toBeInTheDocument();
+  });
+
+  it('rejects a queued poll when a same-master refresh has already begun', async () => {
+    vi.useFakeTimers();
+    const timers = vi.spyOn(window, 'setTimeout');
+    const fresh = deferred<ResumeResponse>();
+    api.list.mockResolvedValue([row('master', true)]);
+    api.get
+      .mockResolvedValueOnce(status('pending'))
+      .mockReturnValueOnce(fresh.promise)
+      .mockResolvedValue(status('failed'));
+    render(<Dashboard />);
+    await act(async () => {});
+    const poll = timers.mock.calls.find(([, delay]) => delay === 3000)?.[0];
+    if (typeof poll !== 'function') throw new Error('Expected poll');
+    fireEvent.focus(window);
+    await act(async () => {});
+    await act(async () => poll());
+    await act(async () => fresh.resolve(status()));
+    expect(api.get).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('dashboard.statusLine:dashboard.status.ready')).toBeInTheDocument();
+    timers.mockRestore();
+  });
+
+  it('backs off and eventually stops polling a stuck job without reporting it failed', async () => {
+    vi.useFakeTimers();
+    api.list.mockResolvedValue([row('master', true)]);
+    api.get.mockResolvedValue(status('processing'));
+    render(<Dashboard />);
+    await act(async () => {});
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    const count = api.get.mock.calls.length;
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(api.get).toHaveBeenCalledTimes(count);
+    for (let i = 0; i < 20; i++) await act(async () => vi.advanceTimersByTimeAsync(30000));
+    const stopped = api.get.mock.calls.length;
+    for (let i = 0; i < 5; i++) await act(async () => vi.advanceTimersByTimeAsync(30000));
+    expect(api.get).toHaveBeenCalledTimes(stopped);
+    expect(stopped).toBeLessThanOrEqual(13);
+    expect(
+      screen.getByText('dashboard.statusLine:dashboard.status.processing')
+    ).toBeInTheDocument();
+  });
+
+  it('refreshes the grid after upload invalidates an older in-flight list', async () => {
+    const old = deferred<ResumeListItem[]>();
+    api.list
+      .mockReturnValueOnce(old.promise)
+      .mockResolvedValue([row('uploaded', true), row('fresh-card')]);
+    render(<Dashboard />);
+    fireEvent.click(screen.getByRole('button', { name: 'finish upload' }));
+    await act(async () => {});
+    expect(screen.getByText('fresh-card')).toBeInTheDocument();
+    await act(async () => old.resolve([row('stale-card')]));
+    expect(screen.queryByText('stale-card')).not.toBeInTheDocument();
   });
 });

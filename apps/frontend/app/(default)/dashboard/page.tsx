@@ -57,6 +57,9 @@ export default function DashboardPage() {
   // Request id guard for concurrent loadTailoredResumes invocations
   const loadRequestIdRef = useRef(0);
   const statusRequestIdRef = useRef(0);
+  const retryMasterRef = useRef<string | null>(null);
+  const pollAttemptsRef = useRef(0);
+  const [statusRevision, setStatusRevision] = useState(0);
   const activeMasterIdRef = useRef<string | null>(null);
   const mountedRef = useRef(true);
   // Lightweight in-memory cache for job snippets to avoid N+1 refetches
@@ -85,6 +88,8 @@ export default function DashboardPage() {
   const adoptMasterResume = useCallback((resumeId: string | null) => {
     if (activeMasterIdRef.current !== resumeId) {
       statusRequestIdRef.current += 1;
+      retryMasterRef.current = null;
+      pollAttemptsRef.current = 0;
       setIsRetrying(false);
     }
     activeMasterIdRef.current = resumeId;
@@ -101,16 +106,21 @@ export default function DashboardPage() {
   }, []);
 
   const checkResumeStatus = useCallback(
-    async (resumeId: string) => {
-      if (!mountedRef.current || activeMasterIdRef.current !== resumeId) return;
+    async (resumeId: string, background = false) => {
+      if (
+        !mountedRef.current ||
+        activeMasterIdRef.current !== resumeId ||
+        retryMasterRef.current === resumeId
+      )
+        return;
+      if (!background) pollAttemptsRef.current = 0;
       const requestId = ++statusRequestIdRef.current;
       const isCurrent = () =>
         mountedRef.current &&
         requestId === statusRequestIdRef.current &&
         activeMasterIdRef.current === resumeId;
       try {
-        setIsRetrying(false);
-        setProcessingStatus('loading');
+        if (!background) setProcessingStatus('loading');
         const data = await fetchResume(resumeId);
         if (!isCurrent()) return;
         const savedStatus = data.raw_resume?.processing_status || 'pending';
@@ -131,6 +141,8 @@ export default function DashboardPage() {
           return;
         }
         setProcessingStatus('failed');
+      } finally {
+        if (isCurrent()) setStatusRevision((version) => version + 1);
       }
     },
     [adoptMasterResume]
@@ -144,13 +156,25 @@ export default function DashboardPage() {
     }
   }, [adoptMasterResume, checkResumeStatus]);
 
-  // Poll serially while processing. Setting loading clears this timer until
-  // the current request settles, so a slow response cannot create overlap.
+  // A bounded backoff preserves the processing label and never overlaps requests.
+  // Focus or an explicit refresh starts a fresh observation window.
   useEffect(() => {
-    if (!masterResumeId || !['pending', 'processing'].includes(processingStatus)) return;
-    const timer = window.setTimeout(() => void checkResumeStatus(masterResumeId), 3000);
+    if (
+      !masterResumeId ||
+      isRetrying ||
+      !['pending', 'processing'].includes(processingStatus) ||
+      pollAttemptsRef.current >= 12
+    )
+      return;
+    const requestId = statusRequestIdRef.current;
+    const delay = Math.min(30_000, 3_000 * 2 ** pollAttemptsRef.current);
+    const timer = window.setTimeout(() => {
+      if (requestId !== statusRequestIdRef.current || document.hidden) return;
+      pollAttemptsRef.current += 1;
+      void checkResumeStatus(masterResumeId, true);
+    }, delay);
     return () => window.clearTimeout(timer);
-  }, [masterResumeId, processingStatus, checkResumeStatus]);
+  }, [masterResumeId, processingStatus, isRetrying, statusRevision, checkResumeStatus]);
 
   const loadTailoredResumes = useCallback(async () => {
     const requestId = ++loadRequestIdRef.current;
@@ -231,6 +255,7 @@ export default function DashboardPage() {
 
   const handleUploadComplete = (resumeId: string) => {
     loadRequestIdRef.current += 1;
+    void loadTailoredResumes();
     localStorage.setItem('master_resume_id', resumeId);
     adoptMasterResume(resumeId);
     // Check status after upload completes
@@ -259,8 +284,9 @@ export default function DashboardPage() {
 
   const handleRetryProcessing = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!masterResumeId) return;
+    if (!masterResumeId || retryMasterRef.current === masterResumeId) return;
     const resumeId = masterResumeId;
+    retryMasterRef.current = resumeId;
     const requestId = ++statusRequestIdRef.current;
     const isCurrent = () =>
       mountedRef.current &&
@@ -286,7 +312,10 @@ export default function DashboardPage() {
       console.error('Retry processing failed:', err);
       setProcessingStatus('failed');
     } finally {
-      if (isCurrent()) setIsRetrying(false);
+      if (isCurrent()) {
+        retryMasterRef.current = null;
+        setIsRetrying(false);
+      }
     }
   };
 

@@ -16,7 +16,7 @@ from fastapi.responses import Response
 from pydantic import ValidationError
 
 from app.config_cache import get_content_language, load_config as _load_config
-from app.database import ResumeNotFoundError, db
+from app.database import ProcessingFinishOutcome, ResumeNotFoundError, db
 from app.pdf import render_resume_pdf, PDFRenderError
 from app.config import settings
 
@@ -47,6 +47,9 @@ from app.schemas import (
     normalize_resume_data,
 )
 from app.services.parser import (
+    DocumentResourceLimitError,
+    MAX_EXTRACTED_TEXT_BYTES,
+    MAX_UNPACKED_DOCUMENT_BYTES,
     has_meaningful_resume_content,
     parse_document,
     parse_resume_to_json,
@@ -629,7 +632,60 @@ ALLOWED_TYPES = {
     "application/msword",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
+DOCUMENT_TYPES_BY_EXTENSION = {
+    ".pdf": "application/pdf",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
 MAX_FILE_SIZE = 4 * 1024 * 1024  # 4MB
+UPLOAD_READ_CHUNK_SIZE = 64 * 1024
+
+
+def _validate_upload_type(file: UploadFile) -> None:
+    """Require the declared MIME type to match a supported filename extension."""
+    if file.content_type not in ALLOWED_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file type: {file.content_type}. Allowed: PDF, DOC, DOCX",
+        )
+
+    suffix = Path(file.filename or "").suffix.lower()
+    if DOCUMENT_TYPES_BY_EXTENSION.get(suffix) != file.content_type:
+        raise HTTPException(
+            status_code=400,
+            detail="Upload a valid PDF, DOC, or DOCX file.",
+        )
+
+
+async def _read_upload_content(file: UploadFile) -> bytes:
+    """Read at most one byte beyond the raw upload limit in bounded chunks."""
+    content = bytearray()
+    while len(content) <= MAX_FILE_SIZE:
+        read_size = min(UPLOAD_READ_CHUNK_SIZE, MAX_FILE_SIZE - len(content) + 1)
+        chunk = await file.read(read_size)
+        if not chunk:
+            return bytes(content)
+        content.extend(chunk)
+    raise HTTPException(
+        status_code=413,
+        detail=f"File too large. Maximum size: {MAX_FILE_SIZE // (1024 * 1024)}MB",
+    )
+
+
+def _require_processing_commit(
+    outcome: ProcessingFinishOutcome,
+    *,
+    deleted_detail: str,
+) -> None:
+    """Map a compare-and-set miss to an intentional client outcome."""
+    if outcome == "committed":
+        return
+    if outcome == "missing":
+        raise HTTPException(status_code=404, detail=deleted_detail)
+    raise HTTPException(
+        status_code=409,
+        detail="Resume processing was superseded by a newer attempt.",
+    )
 
 
 @router.post("/upload", response_model=ResumeUploadResponse)
@@ -639,20 +695,9 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
     Converts the file to Markdown and stores it in the database.
     Optionally parses to structured JSON if LLM is configured.
     """
-    # Validate file type
-    if file.content_type not in ALLOWED_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid file type: {file.content_type}. Allowed: PDF, DOC, DOCX",
-        )
+    _validate_upload_type(file)
 
-    # Read and validate size
-    content = await file.read()
-    if len(content) > MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large. Maximum size: {MAX_FILE_SIZE // (1024 * 1024)}MB",
-        )
+    content = await _read_upload_content(file)
 
     if len(content) == 0:
         raise HTTPException(status_code=400, detail="Empty file")
@@ -660,11 +705,21 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
     # Convert to markdown
     try:
         markdown_content = await parse_document(content, file.filename or "resume.pdf")
+    except DocumentResourceLimitError as e:
+        logger.warning("Document resource limit exceeded for %s: %s", file.filename, e)
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "Document content is too large to process. "
+                f"Maximum expanded size is {MAX_UNPACKED_DOCUMENT_BYTES // (1024 * 1024)}MB "
+                f"and extracted text is {MAX_EXTRACTED_TEXT_BYTES // (1024 * 1024)}MB."
+            ),
+        )
     except Exception as e:
         logger.error(f"Document parsing failed: {e}")
         raise HTTPException(
             status_code=422,
-            detail="Failed to parse document. Please ensure it's a valid PDF or DOCX file.",
+            detail="Failed to parse document. Please upload a valid PDF, DOC, or DOCX file.",
         )
 
     # Validate extracted text is not empty (image-based PDFs / scanned documents)
@@ -673,8 +728,8 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
             status_code=422,
             detail=(
                 "Could not extract text from the uploaded file. The document may be "
-                "image-based or scanned. Please upload a text-based PDF/DOCX with "
-                "selectable text, or run OCR first."
+                "image-based or scanned. Please upload a text-based PDF, DOC, or DOCX "
+                "with selectable text, or run OCR first."
             ),
         )
 
@@ -690,23 +745,46 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
         original_markdown=markdown_content,
     )
 
+    try:
+        processing_token = await db.claim_resume_processing(resume["resume_id"])
+    except ResumeNotFoundError as e:
+        raise HTTPException(
+            status_code=404, detail="Resume was deleted during upload processing."
+        ) from e
+    if processing_token is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Resume processing was superseded by a newer attempt.",
+        )
+
     # Try to parse to structured JSON (optional, may fail if LLM not configured)
     try:
         processed_data = await parse_resume_to_json(markdown_content)
-        await db.update_resume(
+    except Exception as e:
+        logger.warning(f"Resume parsing to JSON failed for {file.filename}: {e}")
+        outcome = await db.finish_resume_processing(
             resume["resume_id"],
-            {
-                "processed_data": processed_data,
-                "processing_status": "ready",
-            },
+            processing_token,
+            processing_status="failed",
+        )
+        _require_processing_commit(
+            outcome,
+            deleted_detail="Resume was deleted during upload processing.",
+        )
+        resume["processing_status"] = "failed"
+    else:
+        outcome = await db.finish_resume_processing(
+            resume["resume_id"],
+            processing_token,
+            processing_status="ready",
+            processed_data=processed_data,
+        )
+        _require_processing_commit(
+            outcome,
+            deleted_detail="Resume was deleted during upload processing.",
         )
         resume["processed_data"] = processed_data
         resume["processing_status"] = "ready"
-    except Exception as e:
-        # LLM parsing failed, update status to failed
-        logger.warning(f"Resume parsing to JSON failed for {file.filename}: {e}")
-        await db.update_resume(resume["resume_id"], {"processing_status": "failed"})
-        resume["processing_status"] = "failed"
 
     # Return accurate status to client (API-001 fix)
     return ResumeUploadResponse(
@@ -1709,38 +1787,58 @@ async def retry_processing(resume_id: str) -> ResumeUploadResponse:
             detail="Resume has no stored content to re-process.",
         )
 
+    allow_ready_at = resume.get("updated_at") if can_retry_legacy_empty_ready else None
+    try:
+        processing_token = await db.claim_resume_processing(
+            resume_id,
+            allow_ready_at=allow_ready_at,
+        )
+    except ResumeNotFoundError as e:
+        raise HTTPException(
+            status_code=404, detail="Resume was deleted during retry."
+        ) from e
+    if processing_token is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Resume processing was superseded by a newer attempt.",
+        )
+
     try:
         processed_data = await parse_resume_to_json(markdown_content)
-        await db.update_resume(
+    except Exception as e:
+        logger.warning(f"Retry processing failed for resume {resume_id}: {e}")
+        outcome = await db.finish_resume_processing(
             resume_id,
-            {
-                "processed_data": processed_data,
-                "processing_status": "ready",
-            },
+            processing_token,
+            processing_status="failed",
+        )
+        _require_processing_commit(
+            outcome,
+            deleted_detail="Resume was deleted during retry.",
+        )
+        return ResumeUploadResponse(
+            message="Retry processing failed",
+            request_id=str(uuid4()),
+            resume_id=resume_id,
+            processing_status="failed",
+            is_master=resume.get("is_master", False),
+        )
+    else:
+        outcome = await db.finish_resume_processing(
+            resume_id,
+            processing_token,
+            processing_status="ready",
+            processed_data=processed_data,
+        )
+        _require_processing_commit(
+            outcome,
+            deleted_detail="Resume was deleted during retry.",
         )
         return ResumeUploadResponse(
             message="Resume processing succeeded on retry",
             request_id=str(uuid4()),
             resume_id=resume_id,
             processing_status="ready",
-            is_master=resume.get("is_master", False),
-        )
-    except Exception as e:
-        logger.warning(f"Retry processing failed for resume {resume_id}: {e}")
-        try:
-            await db.update_resume(resume_id, {"processing_status": "failed"})
-        except ResumeNotFoundError:
-            # The user can delete a resume while a long LLM retry is in
-            # progress.  Do not turn that benign race into a server traceback.
-            # Keyed on the exception type, never on its message text.
-            raise HTTPException(
-                status_code=404, detail="Resume was deleted during retry."
-            ) from e
-        return ResumeUploadResponse(
-            message="Retry processing failed",
-            request_id=str(uuid4()),
-            resume_id=resume_id,
-            processing_status="failed",
             is_master=resume.get("is_master", False),
         )
 

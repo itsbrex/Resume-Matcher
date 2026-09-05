@@ -16,9 +16,11 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from typing import Literal
 from uuid import uuid4
 
 from sqlalchemy import delete, func, select
+from sqlalchemy import and_, or_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session, sessionmaker
@@ -43,6 +45,7 @@ APPLICATION_STATUSES: tuple[str, ...] = (
     "accepted",
     "rejected",
 )
+ProcessingFinishOutcome = Literal["committed", "stale", "missing"]
 
 
 class ResumeNotFoundError(ValueError):
@@ -341,6 +344,86 @@ class Database:
             row.updated_at = _now()
             await session.commit()
             return self._resume_to_dict(row)
+
+    async def claim_resume_processing(
+        self,
+        resume_id: str,
+        *,
+        allow_ready_at: str | None = None,
+    ) -> str | None:
+        """Rotate processing ownership and return its opaque operation token.
+
+        Failed and processing rows are retryable. A legacy ready row is only
+        claimable when the caller observed the same version and found its
+        structured content empty. ``None`` means a concurrent completion made
+        the row ineligible; a missing row raises ``ResumeNotFoundError``.
+        """
+        token = str(uuid4())
+        eligible = Resume.processing_status.in_(("failed", "processing"))
+        if allow_ready_at is not None:
+            eligible = or_(
+                eligible,
+                and_(
+                    Resume.processing_status == "ready",
+                    Resume.updated_at == allow_ready_at,
+                ),
+            )
+
+        async with self._session() as session:
+            result = await session.execute(
+                update(Resume)
+                .where(Resume.resume_id == resume_id, eligible)
+                .values(
+                    processing_status="processing",
+                    processing_token=token,
+                    updated_at=_now(),
+                )
+            )
+            if result.rowcount == 1:
+                await session.commit()
+                return token
+
+            exists = await session.scalar(
+                select(Resume.resume_id).where(Resume.resume_id == resume_id)
+            )
+            if exists is None:
+                raise ResumeNotFoundError(resume_id)
+            return None
+
+    async def finish_resume_processing(
+        self,
+        resume_id: str,
+        token: str,
+        *,
+        processing_status: Literal["ready", "failed"],
+        processed_data: dict[str, Any] | None = None,
+    ) -> ProcessingFinishOutcome:
+        """Commit a terminal state only while ``token`` owns this resume."""
+        values: dict[str, Any] = {
+            "processing_status": processing_status,
+            "processing_token": None,
+            "updated_at": _now(),
+        }
+        if processing_status == "ready":
+            values["processed_data"] = processed_data
+
+        async with self._session() as session:
+            result = await session.execute(
+                update(Resume)
+                .where(
+                    Resume.resume_id == resume_id,
+                    Resume.processing_token == token,
+                )
+                .values(**values)
+            )
+            if result.rowcount == 1:
+                await session.commit()
+                return "committed"
+
+            exists = await session.scalar(
+                select(Resume.resume_id).where(Resume.resume_id == resume_id)
+            )
+            return "stale" if exists is not None else "missing"
 
     async def delete_resume(self, resume_id: str) -> bool:
         """Delete resume by ID."""

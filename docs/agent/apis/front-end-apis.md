@@ -43,6 +43,12 @@ updateOutreachMessage(resumeId: string, content: string) → void
 generateInterviewPrep(resumeId: string) → InterviewPrepData
 ```
 
+Resume upload accepts matching PDF, DOC or DOCX filename/MIME pairs. The backend
+returns 400 for unsupported or mismatched types, 413 for raw/expanded/extracted
+size limits, and 422 for malformed or textless/scanned documents. Upload and
+retry processing return 409 when a newer processing attempt supersedes the
+request, or 404 when the resume is deleted while processing.
+
 ## Resume Wizard (`lib/api/resume-wizard.ts`)
 
 ```typescript

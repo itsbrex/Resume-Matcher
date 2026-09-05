@@ -40,6 +40,7 @@ class Resume(Base):
     parent_id: Mapped[str | None] = mapped_column(String, nullable=True)
     processed_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     processing_status: Mapped[str] = mapped_column(String, default="pending")
+    processing_token: Mapped[str | None] = mapped_column(String, nullable=True)
     cover_letter: Mapped[str | None] = mapped_column(Text, nullable=True)
     outreach_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     interview_prep: Mapped[str | None] = mapped_column(Text, nullable=True)

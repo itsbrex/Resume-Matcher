@@ -88,7 +88,7 @@ class TestPipelineCore:
         ``ready``, with ``processed_data`` round-tripped through real TinyDB.
 
         This proves the upload handler actually wires parse_document ->
-        parse_resume_to_json -> create_resume_atomic_master -> update_resume
+        parse_resume_to_json -> create_resume_atomic_master -> token-guarded finish
         against a real database, which the DB-mocking tests cannot.
         """
         resp = await _upload_resume(isolated_db, sample_resume)

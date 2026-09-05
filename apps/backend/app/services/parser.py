@@ -1,12 +1,18 @@
 """Document parsing service using markitdown and LLM."""
 
+import asyncio
 import logging
 import re
 import tempfile
+import zipfile
 from pathlib import Path
 from typing import Any
 
+import anyio
 from markitdown import MarkItDown
+from pdfminer.pdfdocument import PDFDocument
+from pdfminer.pdfpage import PDFPage
+from pdfminer.pdfparser import PDFParser
 
 from app.llm import complete_json, get_llm_config, get_model_name, get_safe_max_tokens
 from app.prompts import PARSE_RESUME_PROMPT
@@ -14,6 +20,152 @@ from app.prompts.templates import RESUME_SCHEMA_EXAMPLE
 from app.schemas import ResumeData
 
 logger = logging.getLogger(__name__)
+
+DOCUMENT_IO_CHUNK_SIZE = 64 * 1024
+MAX_DOCX_MEMBERS = 1_024
+MAX_UNPACKED_DOCUMENT_BYTES = 16 * 1024 * 1024
+MAX_EXTRACTED_TEXT_BYTES = 2 * 1024 * 1024
+DOCUMENT_CONVERSION_WORKERS = 2
+_DOCUMENT_CONVERSION_LIMITER = anyio.CapacityLimiter(DOCUMENT_CONVERSION_WORKERS)
+
+
+class DocumentValidationError(ValueError):
+    """Raised when uploaded bytes are not a structurally valid document."""
+
+
+class DocumentResourceLimitError(ValueError):
+    """Raised when a valid document exceeds a bounded processing budget."""
+
+
+_COMPOUND_FILE_SIGNATURE = bytes.fromhex("D0CF11E0A1B11AE1")
+
+
+def _validate_pdf_container(path: Path) -> None:
+    """Require a readable PDF catalog with at least one page."""
+    try:
+        with path.open("rb") as stream:
+            document = PDFDocument(PDFParser(stream))
+            if next(iter(PDFPage.create_pages(document)), None) is None:
+                raise ValueError("PDF has no pages")
+    except Exception as exc:
+        raise DocumentValidationError(
+            "The uploaded file is not a valid PDF, DOC, or DOCX document."
+        ) from exc
+
+
+def _validate_docx_container(path: Path) -> None:
+    """Require a bounded, readable Office Open XML word-processing package."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            members = archive.infolist()
+            if len(members) > MAX_DOCX_MEMBERS:
+                raise DocumentResourceLimitError(
+                    f"Document archive contains more than {MAX_DOCX_MEMBERS} entries."
+                )
+
+            names = {member.filename for member in members}
+            if "[Content_Types].xml" not in names or "word/document.xml" not in names:
+                raise DocumentValidationError(
+                    "The uploaded file is not a valid PDF, DOC, or DOCX document."
+                )
+
+            declared_size = 0
+            for member in members:
+                if member.flag_bits & 0x1:
+                    raise DocumentValidationError(
+                        "Encrypted PDF, DOC, or DOCX files are not supported."
+                    )
+                declared_size += member.file_size
+                if declared_size > MAX_UNPACKED_DOCUMENT_BYTES:
+                    raise DocumentResourceLimitError(
+                        "Document expanded content exceeds the 16MB limit."
+                    )
+
+            streamed_size = 0
+            for member in members:
+                if member.is_dir():
+                    continue
+                with archive.open(member) as source:
+                    while chunk := source.read(DOCUMENT_IO_CHUNK_SIZE):
+                        streamed_size += len(chunk)
+                        if streamed_size > MAX_UNPACKED_DOCUMENT_BYTES:
+                            raise DocumentResourceLimitError(
+                                "Document expanded content exceeds the 16MB limit."
+                            )
+    except DocumentResourceLimitError:
+        raise
+    except DocumentValidationError:
+        raise
+    except (OSError, RuntimeError, ValueError, zipfile.BadZipFile) as exc:
+        raise DocumentValidationError(
+            "The uploaded file is not a valid PDF, DOC, or DOCX document."
+        ) from exc
+
+
+def _validate_doc_container(path: Path) -> None:
+    """Validate the fixed compound-file header used by legacy Word documents."""
+    try:
+        with path.open("rb") as stream:
+            header = stream.read(512)
+    except OSError as exc:
+        raise DocumentValidationError(
+            "The uploaded file is not a valid PDF, DOC, or DOCX document."
+        ) from exc
+
+    sector_shift = int.from_bytes(header[30:32], "little") if len(header) >= 32 else -1
+    mini_sector_shift = (
+        int.from_bytes(header[32:34], "little") if len(header) >= 34 else -1
+    )
+    if (
+        len(header) != 512
+        or header[:8] != _COMPOUND_FILE_SIGNATURE
+        or header[28:30] != b"\xfe\xff"
+        or sector_shift not in (9, 12)
+        or mini_sector_shift != 6
+        or header[34:40] != b"\x00" * 6
+    ):
+        raise DocumentValidationError(
+            "The uploaded file is not a valid PDF, DOC, or DOCX document."
+        )
+
+    major_version = int.from_bytes(header[26:28], "little")
+    file_size = path.stat().st_size
+    sector_size = 1 << sector_shift
+    sector_count = file_size // sector_size - 1
+    fat_sector_count = int.from_bytes(header[44:48], "little")
+    first_directory_sector = int.from_bytes(header[48:52], "little")
+    difat_entries = [
+        int.from_bytes(header[offset : offset + 4], "little")
+        for offset in range(76, 512, 4)
+    ]
+    inline_fat_sectors = [entry for entry in difat_entries if entry < 0xFFFFFFFA]
+    if (
+        major_version not in (3, 4)
+        or (major_version == 3 and sector_shift != 9)
+        or (major_version == 4 and sector_shift != 12)
+        or file_size < sector_size * 3
+        or file_size % sector_size != 0
+        or fat_sector_count < 1
+        or fat_sector_count > sector_count
+        or first_directory_sector >= sector_count
+        or len(inline_fat_sectors) < min(fat_sector_count, len(difat_entries))
+        or any(entry >= sector_count for entry in inline_fat_sectors)
+    ):
+        raise DocumentValidationError(
+            "The uploaded file is not a valid PDF, DOC, or DOCX document."
+        )
+
+
+def _validate_extracted_text(text: str) -> None:
+    """Bound prompt-bound UTF-8 text without allocating another full-size copy."""
+    extracted_bytes = 0
+    for offset in range(0, len(text), DOCUMENT_IO_CHUNK_SIZE):
+        chunk = text[offset : offset + DOCUMENT_IO_CHUNK_SIZE]
+        extracted_bytes += len(chunk.encode("utf-8"))
+        if extracted_bytes > MAX_EXTRACTED_TEXT_BYTES:
+            raise DocumentResourceLimitError(
+                "Document extracted text exceeds the 2MB processing limit."
+            )
 
 # Matches date ranges like "Jan 2020 - Dec 2023", "May 2021 - Present",
 # "January 2020 - Current", and single dates like "Jun 2023".
@@ -199,8 +351,36 @@ def has_meaningful_resume_content(resume_data: Any) -> bool:
     )
 
 
+def _parse_document_sync(content: bytes, filename: str) -> str:
+    """Validate and convert a document inside a bounded worker thread."""
+    suffix = Path(filename).suffix.lower()
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+            tmp.write(content)
+        if suffix == ".pdf":
+            _validate_pdf_container(tmp_path)
+        elif suffix == ".doc":
+            _validate_doc_container(tmp_path)
+        elif suffix == ".docx":
+            _validate_docx_container(tmp_path)
+        md = MarkItDown()
+        result = md.convert(str(tmp_path))
+        text = result.text_content
+        if not isinstance(text, str):
+            raise DocumentValidationError(
+                "The uploaded file is not a valid PDF, DOC, or DOCX document."
+            )
+        _validate_extracted_text(text)
+        return text
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+
+
 async def parse_document(content: bytes, filename: str) -> str:
-    """Convert PDF/DOCX to Markdown using markitdown.
+    """Convert a bounded PDF/DOC/DOCX without blocking the request event loop.
 
     Args:
         content: Raw file bytes
@@ -209,19 +389,25 @@ async def parse_document(content: bytes, filename: str) -> str:
     Returns:
         Markdown text content
     """
-    suffix = Path(filename).suffix.lower()
-
-    # Write to temp file for markitdown
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(content)
-        tmp_path = Path(tmp.name)
-
+    worker = asyncio.create_task(
+        anyio.to_thread.run_sync(
+            _parse_document_sync,
+            content,
+            filename,
+            abandon_on_cancel=False,
+            limiter=_DOCUMENT_CONVERSION_LIMITER,
+        )
+    )
     try:
-        md = MarkItDown()
-        result = md.convert(str(tmp_path))
-        return result.text_content
-    finally:
-        tmp_path.unlink(missing_ok=True)
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        try:
+            await asyncio.shield(worker)
+        except Exception:
+            # The request was already cancelled; consume the worker error after
+            # its tempfile cleanup rather than replacing cancellation.
+            pass
+        raise
 
 
 async def parse_resume_to_json(markdown_text: str) -> dict[str, Any]:

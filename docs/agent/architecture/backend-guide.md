@@ -44,6 +44,8 @@ await db.list_resumes() → list[dict]
 await db.update_resume(resume_id, updates)
 await db.delete_resume(resume_id) → bool
 await db.set_master_resume(resume_id)            # Exactly one master allowed
+await db.claim_resume_processing(resume_id)      # Rotate private operation token
+await db.finish_resume_processing(...)           # Token-guarded ready/failed commit
 await db.create_job(content, resume_id)
 await db.create_application(...) / list_applications / bulk_update_applications
 get_api_key_ciphertexts() / replace_api_keys(...)  # sync; encrypted api_keys table
@@ -102,7 +104,24 @@ GET  /api/v1/applications        # Kanban tracker: grouped list (+ POST/PATCH/DE
 
 ## Data Flow
 
-**Upload:** File → markitdown → Markdown → LLM parse → JSON → SQLite (via `db`)
+**Upload:** Bounded file read → container validation → worker-thread MarkItDown →
+bounded Markdown → LLM parse → token-guarded JSON/status commit → SQLite (via `db`)
+
+### Upload validation and resource policy
+
+- Supported filename/MIME pairs are PDF (`.pdf`), legacy Word (`.doc`) and
+  Office Open XML Word (`.docx`). MIME alone does not establish the format:
+  PDF structure, the DOC compound-file header, or the DOCX ZIP/package must validate.
+- Raw input is read in 64 KiB chunks and capped at 4 MiB. DOCX packages permit
+  at most 1,024 members and 16 MiB total expanded bytes, checked from metadata
+  and again while streaming members. Extracted UTF-8 text is capped at 2 MiB
+  before prompt construction.
+- MarkItDown validation/conversion runs outside the event loop with at most two
+  concurrent workers. Cancellation waits for the converter's `finally` cleanup,
+  so temporary files are removed on success, error and cancellation.
+- Each upload/retry claims a private processing token. Only the latest token may
+  commit `ready` or `failed`; superseded requests receive 409. If the row is
+  deleted while parsing, completion receives 404 and does not recreate or update it.
 
 **Improve:** Resume + Job → Extract keywords (LLM) → Tailor (LLM) → Store. Routers call
 services; services call `app/llm.py`; persistence goes through the async `db` facade.

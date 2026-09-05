@@ -541,7 +541,11 @@
       "updatedCountSingular": "{count} élément mis à jour avec succès",
       "updatedCountPlural": "{count} éléments mis à jour avec succès",
       "updatedFallback": "Votre CV a été mis à jour avec des descriptions améliorées",
-      "doneButton": "Terminé"
+      "doneButton": "Terminé",
+      "refreshFailedTitle": "Enregistré — actualisation nécessaire",
+      "refreshFailed": "Les améliorations ont été enregistrées, mais cette vue n’a pas pu être actualisée. Réessayez pour afficher le CV à jour.",
+      "retryRefresh": "Réessayer l’actualisation",
+      "refreshing": "Actualisation du CV..."
     },
     "noImprovements": {
       "title": "Votre CV est excellent !",

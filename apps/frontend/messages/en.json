@@ -541,7 +541,11 @@
       "updatedCountSingular": "{count} item updated successfully",
       "updatedCountPlural": "{count} items updated successfully",
       "updatedFallback": "Your resume has been updated with enhanced descriptions",
-      "doneButton": "Done"
+      "doneButton": "Done",
+      "refreshFailedTitle": "Saved — refresh needed",
+      "refreshFailed": "Your enhancements were saved, but this view could not refresh. Retry to show the latest resume.",
+      "retryRefresh": "Retry refresh",
+      "refreshing": "Refreshing resume..."
     },
     "noImprovements": {
       "title": "Your resume looks great!",

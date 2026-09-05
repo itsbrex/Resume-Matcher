@@ -62,6 +62,8 @@ Current storage is SQLite: `DATA_DIR/resume_matcher.db`. Document/tracker/previe
 
 See [storage transactions](storage-transactions.md), [preview confirmation](../features/preview-confirmation.md), [AI operation budgets](ai-operation-budgets.md), [LLM retry policy](../llm-integration.md) and [PDF rendering](../design/pdf-template-guide.md) for exact boundaries. A timeout cancels cooperative work; resource cleanup can outlast that deadline while still retaining its resource reservation.
 
+PDF ingestion additionally limits decoded streams to 16 MiB in total. Predictor and fax dimensions are checked before decoder allocation: at most 32,768 scanline columns and 256 KiB per predictor row. Compressed image formats passed through by pdfminer are not rasterized or OCR-processed by this text extraction path. These are processing limits, not an exact process-memory or wall-clock guarantee.
+
 ## Reproducible checks and their limits
 
 Run the deterministic suites from their own application directories:

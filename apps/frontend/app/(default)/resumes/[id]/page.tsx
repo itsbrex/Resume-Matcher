@@ -29,6 +29,7 @@ import { useTranslations } from '@/lib/i18n';
 import { withLocalizedDefaultSections } from '@/lib/utils/section-helpers';
 import { useLanguage } from '@/lib/context/language-context';
 import { downloadBlobAsFile, openUrlInNewTab, sanitizeFilename } from '@/lib/utils/download';
+import { useOperationOwner } from '@/hooks/use-operation-owner';
 
 type ProcessingStatus = 'pending' | 'processing' | 'ready' | 'failed';
 
@@ -59,6 +60,11 @@ export default function ResumeViewerPage() {
   const [isTailoredResume, setIsTailoredResume] = useState(false);
 
   const resumeId = params?.id as string;
+  const {
+    begin: beginResumeLoad,
+    isCurrent: isCurrentResumeLoad,
+    invalidate: invalidateResumeLoad,
+  } = useOperationOwner(resumeId);
 
   const localizedResumeData = useMemo(() => {
     if (!resumeData) return null;
@@ -67,12 +73,16 @@ export default function ResumeViewerPage() {
 
   useEffect(() => {
     if (!resumeId) return;
+    setShowEnrichmentModal(false);
+    const token = beginResumeLoad();
+    if (token === null) return;
 
     const loadResume = async () => {
       try {
         setLoading(true);
         setError(null);
         const data = await fetchResume(resumeId);
+        if (!isCurrentResumeLoad(token)) return;
 
         // Get processing status
         const status = (data.raw_resume?.processing_status || 'pending') as ProcessingStatus;
@@ -102,16 +112,17 @@ export default function ResumeViewerPage() {
           setError(t('resumeViewer.errors.noDataAvailable'));
         }
       } catch (err) {
+        if (!isCurrentResumeLoad(token)) return;
         console.error('Failed to load resume:', err);
         setError(t('resumeViewer.errors.failedToLoad'));
       } finally {
-        setLoading(false);
+        if (isCurrentResumeLoad(token)) setLoading(false);
       }
     };
 
     loadResume();
     setIsMasterResume(localStorage.getItem('master_resume_id') === resumeId);
-  }, [resumeId, t]);
+  }, [resumeId, t, beginResumeLoad, isCurrentResumeLoad]);
 
   const handleRetryProcessing = async () => {
     if (!resumeId) return;
@@ -187,21 +198,32 @@ export default function ResumeViewerPage() {
   };
 
   // Reload resume data after enrichment
-  const reloadResumeData = async () => {
+  const reloadResumeData = async (): Promise<boolean> => {
+    const token = beginResumeLoad();
+    if (token === null) return false;
     try {
       const data = await fetchResume(resumeId);
-      if (data.processed_resume) {
-        setResumeData(data.processed_resume as ResumeData);
-        setError(null);
-      }
+      if (!isCurrentResumeLoad(token)) return false;
+      if (!data.processed_resume) throw new Error('Refreshed resume has no processed data');
+      setResumeData(data.processed_resume as ResumeData);
+      setError(null);
+      return true;
     } catch (err) {
+      if (!isCurrentResumeLoad(token)) return false;
       console.error('Failed to reload resume:', err);
+      throw err;
     }
   };
 
-  const handleEnrichmentComplete = () => {
+  const handleEnrichmentComplete = async (): Promise<boolean> => {
+    const refreshed = await reloadResumeData();
+    if (refreshed) setShowEnrichmentModal(false);
+    return refreshed;
+  };
+
+  const handleEnrichmentClose = () => {
+    invalidateResumeLoad();
     setShowEnrichmentModal(false);
-    reloadResumeData();
   };
 
   const handleDownload = async () => {
@@ -531,7 +553,7 @@ export default function ResumeViewerPage() {
         <EnrichmentModal
           resumeId={resumeId}
           isOpen={showEnrichmentModal}
-          onClose={() => setShowEnrichmentModal(false)}
+          onClose={handleEnrichmentClose}
           onComplete={handleEnrichmentComplete}
         />
       )}

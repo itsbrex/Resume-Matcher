@@ -1,0 +1,236 @@
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import ResumeViewerPage from '@/app/(default)/resumes/[id]/page';
+import { fetchResume } from '@/lib/api/resume';
+import { analyzeResume, applyEnhancements, generateEnhancements } from '@/lib/api/enrichment';
+
+const route = vi.hoisted(() => ({ resumeId: 'resume-a' }));
+const translate = vi.hoisted(() => (key: string) => key);
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: vi.fn() }),
+  useParams: () => ({ id: route.resumeId }),
+}));
+vi.mock('@/lib/i18n', () => ({
+  useTranslations: () => ({ t: translate }),
+}));
+vi.mock('@/lib/context/status-cache', () => ({
+  useStatusCache: () => ({ decrementResumes: vi.fn(), setHasMasterResume: vi.fn() }),
+}));
+vi.mock('@/lib/context/language-context', () => ({
+  useLanguage: () => ({ uiLanguage: 'en' }),
+}));
+vi.mock('@/components/dashboard/resume-component', () => ({
+  default: ({ resumeData }: { resumeData: { personalInfo?: { name?: string } } }) => (
+    <div data-testid="resume-name">{resumeData.personalInfo?.name}</div>
+  ),
+}));
+vi.mock('@/lib/api/resume', () => ({
+  fetchResume: vi.fn(),
+  deleteResume: vi.fn(),
+  retryProcessing: vi.fn(),
+  renameResume: vi.fn(),
+  downloadResumePdf: vi.fn(),
+  getResumePdfUrl: vi.fn(),
+}));
+vi.mock('@/lib/api/enrichment', () => ({
+  analyzeResume: vi.fn(),
+  generateEnhancements: vi.fn(),
+  applyEnhancements: vi.fn(),
+}));
+
+const mockedFetchResume = vi.mocked(fetchResume);
+const mockedAnalyzeResume = vi.mocked(analyzeResume);
+const mockedGenerateEnhancements = vi.mocked(generateEnhancements);
+const mockedApplyEnhancements = vi.mocked(applyEnhancements);
+
+function resume(name: string, resumeId = 'resume-a'): Awaited<ReturnType<typeof fetchResume>> {
+  return {
+    resume_id: resumeId,
+    title: `${name} resume`,
+    processed_resume: {
+      personalInfo: { name },
+      workExperience: [],
+      education: [],
+      personalProjects: [],
+      additional: {},
+    },
+    raw_resume: {
+      id: null,
+      content: '',
+      content_type: 'application/json',
+      created_at: '2026-09-05T00:00:00Z',
+      processing_status: 'ready',
+    },
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+
+async function reachSavedCompletion(expectedSaves = 1): Promise<void> {
+  fireEvent.click(await screen.findByRole('button', { name: 'resumeViewer.enhanceResume' }));
+  fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'Python systems' } });
+  fireEvent.click(screen.getByRole('button', { name: 'common.finish' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'enrichment.preview.applyButton' }));
+  expect(
+    await screen.findByRole('button', { name: 'enrichment.complete.doneButton' })
+  ).toBeVisible();
+  expect(mockedApplyEnhancements).toHaveBeenCalledTimes(expectedSaves);
+}
+
+beforeEach(() => {
+  vi.resetAllMocks();
+  localStorage.clear();
+  route.resumeId = 'resume-a';
+  localStorage.setItem('master_resume_id', 'resume-a');
+  HTMLDialogElement.prototype.showModal = function showModal() {
+    this.setAttribute('open', '');
+  };
+  HTMLDialogElement.prototype.close = function close() {
+    this.removeAttribute('open');
+  };
+  mockedAnalyzeResume.mockResolvedValue({
+    items_to_enrich: [
+      {
+        item_id: 'exp_0',
+        item_type: 'experience',
+        title: 'Engineer',
+        current_description: ['Built tools'],
+        weakness_reason: 'Needs detail',
+      },
+    ],
+    questions: [
+      {
+        question_id: 'q1',
+        item_id: 'exp_0',
+        question: 'What did you build?',
+        placeholder: 'Describe the result',
+      },
+    ],
+  });
+  mockedGenerateEnhancements.mockResolvedValue({
+    enhancements: [
+      {
+        item_id: 'exp_0',
+        item_type: 'experience',
+        title: 'Engineer',
+        original_description: ['Built tools'],
+        enhanced_description: ['Built reliable Python systems'],
+      },
+    ],
+  });
+  mockedApplyEnhancements.mockResolvedValue({ message: 'Saved', updated_items: 1 });
+});
+
+describe('resume viewer enrichment completion', () => {
+  it('shows a refresh-only retry after apply succeeds and refresh fails', async () => {
+    mockedFetchResume
+      .mockResolvedValueOnce(resume('Before'))
+      .mockRejectedValueOnce(new Error('Refresh offline'))
+      .mockResolvedValueOnce(resume('After'));
+    render(<ResumeViewerPage />);
+    await reachSavedCompletion();
+
+    fireEvent.click(screen.getByRole('button', { name: 'enrichment.complete.doneButton' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('enrichment.complete.refreshFailed');
+    fireEvent.click(screen.getByRole('button', { name: 'enrichment.complete.retryRefresh' }));
+    await waitFor(() => expect(screen.getByTestId('resume-name')).toHaveTextContent('After'));
+    expect(mockedApplyEnhancements).toHaveBeenCalledTimes(1);
+    expect(mockedFetchResume).toHaveBeenCalledTimes(3);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('does not let an old enrichment refresh replace a new viewer identity', async () => {
+    const staleRefresh = deferred<Awaited<ReturnType<typeof fetchResume>>>();
+    mockedFetchResume
+      .mockResolvedValueOnce(resume('A before'))
+      .mockReturnValueOnce(staleRefresh.promise)
+      .mockResolvedValueOnce(resume('B current', 'resume-b'));
+    const view = render(<ResumeViewerPage />);
+    await reachSavedCompletion();
+    fireEvent.click(screen.getByRole('button', { name: 'enrichment.complete.doneButton' }));
+    await waitFor(() => expect(mockedFetchResume).toHaveBeenCalledTimes(2));
+
+    route.resumeId = 'resume-b';
+    localStorage.setItem('master_resume_id', 'resume-b');
+    view.rerender(<ResumeViewerPage />);
+    await waitFor(() => expect(screen.getByTestId('resume-name')).toHaveTextContent('B current'));
+    await act(async () => staleRefresh.resolve(resume('A stale')));
+
+    expect(screen.getByTestId('resume-name')).toHaveTextContent('B current');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(mockedApplyEnhancements).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows completing enrichment for a new resume while the old refresh is pending', async () => {
+    const staleRefresh = deferred<Awaited<ReturnType<typeof fetchResume>>>();
+    mockedFetchResume
+      .mockResolvedValueOnce(resume('A before'))
+      .mockReturnValueOnce(staleRefresh.promise)
+      .mockResolvedValueOnce(resume('B before', 'resume-b'))
+      .mockResolvedValueOnce(resume('B after', 'resume-b'));
+    const view = render(<ResumeViewerPage />);
+    await reachSavedCompletion();
+    fireEvent.click(screen.getByRole('button', { name: 'enrichment.complete.doneButton' }));
+
+    route.resumeId = 'resume-b';
+    localStorage.setItem('master_resume_id', 'resume-b');
+    view.rerender(<ResumeViewerPage />);
+    await waitFor(() => expect(screen.getByTestId('resume-name')).toHaveTextContent('B before'));
+    await reachSavedCompletion(2);
+    fireEvent.click(screen.getByRole('button', { name: 'enrichment.complete.doneButton' }));
+    await waitFor(() => expect(screen.getByTestId('resume-name')).toHaveTextContent('B after'));
+
+    await act(async () => staleRefresh.resolve(resume('A stale')));
+    expect(screen.getByTestId('resume-name')).toHaveTextContent('B after');
+    expect(mockedApplyEnhancements).toHaveBeenCalledTimes(2);
+    expect(mockedFetchResume).toHaveBeenLastCalledWith('resume-b');
+  });
+
+  it('retains the save and allows retry when the refresh has no processed resume', async () => {
+    mockedFetchResume
+      .mockResolvedValueOnce(resume('Before'))
+      .mockResolvedValueOnce({ ...resume('Missing'), processed_resume: null })
+      .mockResolvedValueOnce(resume('After'));
+    render(<ResumeViewerPage />);
+    await reachSavedCompletion();
+    fireEvent.click(screen.getByRole('button', { name: 'enrichment.complete.doneButton' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('enrichment.complete.refreshFailed');
+    expect(screen.getByTestId('resume-name')).toHaveTextContent('Before');
+    fireEvent.click(screen.getByRole('button', { name: 'enrichment.complete.retryRefresh' }));
+    await waitFor(() => expect(screen.getByTestId('resume-name')).toHaveTextContent('After'));
+    expect(mockedApplyEnhancements).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a refresh completed after closing and reopening enrichment', async () => {
+    const staleRefresh = deferred<Awaited<ReturnType<typeof fetchResume>>>();
+    mockedFetchResume
+      .mockResolvedValueOnce(resume('Before'))
+      .mockReturnValueOnce(staleRefresh.promise);
+    render(<ResumeViewerPage />);
+    await reachSavedCompletion();
+    fireEvent.click(screen.getByRole('button', { name: 'enrichment.complete.doneButton' }));
+    const refreshButton = screen.getByRole('button', { name: 'enrichment.complete.refreshing' });
+    expect(refreshButton).toBeDisabled();
+    fireEvent.click(refreshButton);
+    expect(mockedFetchResume).toHaveBeenCalledTimes(2);
+
+    fireEvent.click(screen.getByRole('button', { name: 'common.close' }));
+    fireEvent.click(screen.getByRole('button', { name: 'resumeViewer.enhanceResume' }));
+    expect(await screen.findByRole('textbox')).toBeVisible();
+    await act(async () => staleRefresh.resolve(resume('Stale')));
+
+    expect(screen.getByTestId('resume-name')).toHaveTextContent('Before');
+    expect(screen.getByRole('textbox')).toBeVisible();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(mockedApplyEnhancements).toHaveBeenCalledTimes(1);
+  });
+});

@@ -107,7 +107,7 @@ if (response.processed_resume) {
 
 ## Async ownership and acknowledged saves
 
-`use-operation-owner.ts` invalidates late enrichment/regeneration results after reset, a resume change, or unmount. Generation, apply, and refresh are separate stages. Once regeneration apply is acknowledged, a failed refresh shows a saved-but-refresh-failed notice; Retry refresh does not apply the changes again. Enrichment previews retain failed-item identities alongside successful enhancements, including after an apply failure and retry.
+`use-operation-owner.ts` invalidates late enrichment/regeneration results after reset, a resume change, or unmount. Generation, apply, and refresh are separate stages. Once regeneration or enrichment apply is acknowledged, a failed viewer refresh shows a saved-but-refresh-failed notice; Retry refresh fetches the saved resume without applying the changes again. Closing that notice or changing the viewer identity invalidates the pending refresh without undoing the durable save. Enrichment previews retain failed-item identities alongside successful enhancements, including after an apply failure and retry.
 
 The tailor page records a confirmed server response before navigation and optimistic counters. Retrying navigation reuses that acknowledgement. Confirmation failure retries the same stored job and preview; the Generate action intentionally uploads a new job before making a new preview. Closing/rejecting the preview or leaving the route prevents late results from updating the current UI.
 

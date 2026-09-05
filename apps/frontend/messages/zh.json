@@ -541,7 +541,11 @@
       "updatedCountSingular": "已成功更新 {count} 条内容",
       "updatedCountPlural": "已成功更新 {count} 条内容",
       "updatedFallback": "已将增强描述更新到你的简历中",
-      "doneButton": "完成"
+      "doneButton": "完成",
+      "refreshFailedTitle": "已保存 — 需要刷新",
+      "refreshFailed": "增强内容已保存，但当前页面无法刷新。请重试以查看最新简历。",
+      "retryRefresh": "重试刷新",
+      "refreshing": "正在刷新简历..."
     },
     "noImprovements": {
       "title": "你的简历已经很棒！",

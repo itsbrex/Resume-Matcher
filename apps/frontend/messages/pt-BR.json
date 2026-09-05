@@ -541,7 +541,11 @@
       "updatedCountSingular": "{count} item atualizado com sucesso",
       "updatedCountPlural": "{count} itens atualizados com sucesso",
       "updatedFallback": "Seu currículo foi atualizado com descrições aprimoradas",
-      "doneButton": "Concluído"
+      "doneButton": "Concluído",
+      "refreshFailedTitle": "Salvo — atualização necessária",
+      "refreshFailed": "As melhorias foram salvas, mas esta tela não pôde ser atualizada. Tente novamente para ver o currículo mais recente.",
+      "retryRefresh": "Tentar atualizar novamente",
+      "refreshing": "Atualizando currículo..."
     },
     "noImprovements": {
       "title": "Seu currículo está ótimo!",

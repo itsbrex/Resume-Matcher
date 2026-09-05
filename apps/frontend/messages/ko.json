@@ -541,7 +541,11 @@
       "updatedCountSingular": "{count}개 항목이 성공적으로 업데이트되었습니다",
       "updatedCountPlural": "{count}개 항목이 성공적으로 업데이트되었습니다",
       "updatedFallback": "이력서가 개선된 설명으로 업데이트되었습니다",
-      "doneButton": "완료"
+      "doneButton": "완료",
+      "refreshFailedTitle": "저장됨 — 새로 고침 필요",
+      "refreshFailed": "개선 내용은 저장되었지만 이 화면을 새로 고치지 못했습니다. 최신 이력서를 보려면 다시 시도하세요.",
+      "retryRefresh": "새로 고침 재시도",
+      "refreshing": "이력서 새로 고치는 중..."
     },
     "noImprovements": {
       "title": "이력서가 훌륭합니다!",

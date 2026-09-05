@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { XIcon, Sparkles } from 'lucide-react';
 import { useEnrichmentWizard } from '@/hooks/use-enrichment-wizard';
 import { useTranslations } from '@/lib/i18n';
+import { useOperationOwner } from '@/hooks/use-operation-owner';
 import {
   AnalyzingStep,
   GeneratingStep,
@@ -19,12 +20,15 @@ interface EnrichmentModalProps {
   resumeId: string;
   isOpen: boolean;
   onClose: () => void;
-  onComplete: () => void;
+  onComplete: () => Promise<boolean>;
 }
 
 export function EnrichmentModal({ resumeId, isOpen, onClose, onComplete }: EnrichmentModalProps) {
   const { t } = useTranslations();
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const [refreshFailed, setRefreshFailed] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const { begin, isCurrent, invalidate } = useOperationOwner(resumeId);
 
   const {
     state,
@@ -68,14 +72,28 @@ export function EnrichmentModal({ resumeId, isOpen, onClose, onComplete }: Enric
 
   // Handle close
   const handleClose = () => {
+    invalidate();
+    setRefreshFailed(false);
+    setIsRefreshing(false);
     reset();
     onClose();
   };
 
   // Handle complete
-  const handleComplete = () => {
-    reset();
-    onComplete();
+  const handleComplete = async () => {
+    const token = begin();
+    if (token === null) return;
+    setRefreshFailed(false);
+    setIsRefreshing(true);
+    try {
+      const refreshed = await onComplete();
+      if (!isCurrent(token) || !refreshed) return;
+      reset();
+    } catch {
+      if (isCurrent(token)) setRefreshFailed(true);
+    } finally {
+      if (isCurrent(token)) setIsRefreshing(false);
+    }
   };
 
   // Handle backdrop click
@@ -185,7 +203,14 @@ export function EnrichmentModal({ resumeId, isOpen, onClose, onComplete }: Enric
         return <ApplyingStep />;
 
       case 'complete':
-        return <CompleteStep onClose={handleComplete} updatedCount={state.preview.length} />;
+        return (
+          <CompleteStep
+            onClose={handleComplete}
+            updatedCount={state.preview.length}
+            refreshFailed={refreshFailed}
+            isRefreshing={isRefreshing}
+          />
+        );
 
       case 'no-improvements':
         return (

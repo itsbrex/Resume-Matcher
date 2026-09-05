@@ -541,7 +541,11 @@
       "updatedCountSingular": "{count} elemento actualizado correctamente",
       "updatedCountPlural": "{count} elementos actualizados correctamente",
       "updatedFallback": "Tu currículum se actualizó con descripciones mejoradas",
-      "doneButton": "Listo"
+      "doneButton": "Listo",
+      "refreshFailedTitle": "Guardado — actualización necesaria",
+      "refreshFailed": "Las mejoras se guardaron, pero esta vista no pudo actualizarse. Reintenta para ver el currículum más reciente.",
+      "retryRefresh": "Reintentar actualización",
+      "refreshing": "Actualizando currículum..."
     },
     "noImprovements": {
       "title": "¡Tu currículum se ve genial!",

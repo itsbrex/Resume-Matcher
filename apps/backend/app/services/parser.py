@@ -48,6 +48,9 @@ DOCUMENT_IO_CHUNK_SIZE = 64 * 1024
 MAX_DOCX_MEMBERS = 1_024
 MAX_UNPACKED_DOCUMENT_BYTES = 16 * 1024 * 1024
 MAX_EXTRACTED_TEXT_BYTES = 2 * 1024 * 1024
+# Decoder row buffers can allocate from dimensions before consuming input.
+MAX_PDF_SCANLINE_COLUMNS = 32_768
+MAX_PDF_SCANLINE_BYTES = 256 * 1024
 DOCUMENT_CONVERSION_WORKERS = 2
 _DOCUMENT_CONVERSION_LIMITER = anyio.CapacityLimiter(DOCUMENT_CONVERSION_WORKERS)
 
@@ -183,7 +186,7 @@ def _decode_ccitt_bounded(data: bytes, params: dict[str, Any], limit: int) -> by
     width = int_value(params.get("Columns"))
     if width <= 0:
         raise ValueError("CCITT stream has no positive column count")
-    if (width + 7) // 8 > limit:
+    if width > MAX_PDF_SCANLINE_COLUMNS or (width + 7) // 8 > limit:
         raise DocumentResourceLimitError(
             "Document expanded content exceeds the 16MB limit."
         )
@@ -205,12 +208,17 @@ def _apply_pdf_predictor(data: bytes, params: dict[str, Any]) -> bytes:
     colors = int_value(params.get("Colors", 1))
     columns = int_value(params.get("Columns", 1))
     bits_per_component = int_value(params.get("BitsPerComponent", 8))
+    if colors <= 0 or columns <= 0 or bits_per_component <= 0:
+        raise ValueError("PDF predictor dimensions must be positive")
+    row_bytes = (colors * columns * bits_per_component + 7) // 8
+    if columns > MAX_PDF_SCANLINE_COLUMNS or row_bytes > MAX_PDF_SCANLINE_BYTES:
+        raise DocumentResourceLimitError(
+            "Document decoder row dimensions exceed the processing limit."
+        )
     if predictor == 2:
         return apply_tiff_predictor(colors, columns, bits_per_component, data)
     if predictor >= 10:
-        return apply_png_predictor(
-            predictor, colors, columns, bits_per_component, data
-        )
+        return apply_png_predictor(predictor, colors, columns, bits_per_component, data)
     raise ValueError("Unsupported PDF predictor")
 
 

@@ -354,6 +354,8 @@ async def test_cancellation_logs_late_converter_failure(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A worker failure after cancellation is logged without replacing cancellation."""
+    converter_dir = tmp_path / "converter"
+    converter_dir.mkdir()
     document = _docx_bytes("late failure")
     entered = threading.Event()
     release = threading.Event()
@@ -365,7 +367,7 @@ async def test_cancellation_logs_late_converter_failure(
 
     with (
         caplog.at_level("ERROR", logger="app.services.parser"),
-        patch("app.services.parser.tempfile.tempdir", str(tmp_path)),
+        patch("app.services.parser.tempfile.tempdir", str(converter_dir)),
         patch("app.services.parser.MarkItDown.convert", new=failing_convert),
     ):
         task = asyncio.create_task(parse_document(document, "cancelled-error.docx"))
@@ -376,7 +378,7 @@ async def test_cancellation_logs_late_converter_failure(
         with pytest.raises(asyncio.CancelledError):
             await task
 
-    assert list(tmp_path.iterdir()) == []
+    assert list(converter_dir.iterdir()) == []
     assert "Document conversion failed after request cancellation" in caplog.text
     assert "controlled late converter failure" in caplog.text
 
@@ -398,3 +400,30 @@ async def test_tempfile_cleanup_after_success_and_converter_error(tmp_path: Path
                 await parse_document(document, "error.docx")
 
     assert list(converter_dir.iterdir()) == []
+
+
+@pytest.mark.parametrize("predictor", [2, 12])
+def test_pdf_predictor_rejects_huge_dimensions_before_decoder_allocation(
+    predictor: int,
+) -> None:
+    from app.services.parser import _apply_pdf_predictor
+
+    target = "apply_tiff_predictor" if predictor == 2 else "apply_png_predictor"
+    with patch(f"app.services.parser.{target}", return_value=b"") as decoder:
+        with pytest.raises(DocumentResourceLimitError):
+            _apply_pdf_predictor(
+                b"\x00", {"Predictor": predictor, "Columns": 1_000_000_000}
+            )
+        decoder.assert_not_called()
+
+
+def test_pdf_fax_rejects_huge_bitmap_width_before_decoder_allocation() -> None:
+    from app.services.parser import _decode_ccitt_bounded
+
+    with patch("app.services.parser._BoundedCCITTFaxDecoder") as decoder:
+        decoder.return_value.close.return_value = b""
+        with pytest.raises(DocumentResourceLimitError):
+            _decode_ccitt_bounded(
+                b"", {"K": -1, "Columns": 100_000_000}, 16 * 1024 * 1024
+            )
+        decoder.assert_not_called()

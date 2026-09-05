@@ -958,7 +958,10 @@
       "create": "Create master resume",
       "keepAdding": "Keep adding",
       "backToDashboard": "Back to Dashboard",
-      "openCreated": "Open Created Resume"
+      "openCreated": "Open Created Resume",
+      "retryDraftBackup": "Retry local backup",
+      "stay": "Stay here",
+      "leaveWithoutSaving": "Leave without saving"
     },
     "preview": {
       "label": "Live Draft",
@@ -973,6 +976,14 @@
       "turnFailed": "The wizard could not save that answer. Try again.",
       "finalizeFailed": "The wizard could not create your master resume. Try again.",
       "createdNavigationFailed": "Your master resume was created, but this page could not open it automatically. Use the button below to continue."
+    },
+    "draftStorageUnavailable": {
+      "title": "Local draft unavailable",
+      "description": "Your latest wizard progress is only in this tab. Retry the local backup before leaving or reloading."
+    },
+    "leaveWithoutDraft": {
+      "title": "Leave without a local backup?",
+      "description": "Your latest wizard progress will be lost if you leave or reload before the local backup succeeds."
     },
     "entry": {
       "kicker": "Master Resume Setup",

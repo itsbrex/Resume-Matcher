@@ -958,7 +958,10 @@
       "create": "マスター履歴書を作成",
       "keepAdding": "続けて追加",
       "backToDashboard": "ダッシュボードに戻る",
-      "openCreated": "作成した履歴書を開く"
+      "openCreated": "作成した履歴書を開く",
+      "retryDraftBackup": "ローカル保存を再試行",
+      "stay": "このページに留まる",
+      "leaveWithoutSaving": "保存せずに移動"
     },
     "preview": {
       "label": "ライブ下書き",
@@ -973,6 +976,14 @@
       "turnFailed": "ウィザードはその回答を保存できませんでした。もう一度お試しください。",
       "finalizeFailed": "ウィザードはマスター履歴書を作成できませんでした。もう一度お試しください。",
       "createdNavigationFailed": "マスター履歴書は作成されましたが、このページから自動的に開けませんでした。下のボタンから続行してください。"
+    },
+    "draftStorageUnavailable": {
+      "title": "ローカル下書きを保存できません",
+      "description": "最新の進行状況はこのタブにのみ残っています。ページを移動または再読み込みする前に、ローカル保存を再試行してください。"
+    },
+    "leaveWithoutDraft": {
+      "title": "ローカル保存なしで移動しますか？",
+      "description": "ローカル保存が完了する前にページを移動または再読み込みすると、最新の進行状況が失われます。"
     },
     "entry": {
       "kicker": "マスター履歴書の設定",

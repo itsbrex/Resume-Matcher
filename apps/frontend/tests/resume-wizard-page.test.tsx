@@ -71,6 +71,7 @@ describe('ResumeWizardPage', () => {
     });
     expect(await screen.findByText('Where have you worked?')).toBeInTheDocument();
     expect(screen.getByText('James')).toBeInTheDocument();
+    expect(screen.queryByText('resumeWizard.draftStorageUnavailable.description')).toBeNull();
   });
 
   it('moves to review via the Review action', async () => {
@@ -402,5 +403,103 @@ describe('ResumeWizardPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'resumeWizard.actions.openCreated' }));
     expect(push).toHaveBeenLastCalledWith('/builder?id=resume_committed');
     expect(mockedFinalize).toHaveBeenCalledTimes(1);
+  });
+
+  it('protects updated wizard state when its local backup fails and can retry the backup', async () => {
+    push.mockImplementation(() => undefined);
+    localStorage.setItem(
+      'resume_wizard_draft',
+      JSON.stringify(
+        makeState({
+          step: 'question',
+          current_question: { text: 'Current question?', section: 'skills' },
+          asked_count: 1,
+        })
+      )
+    );
+    mockedPostTurn.mockResolvedValueOnce({
+      state: makeState({
+        step: 'question',
+        current_question: { text: 'Next question?', section: 'workExperience' },
+        resume_data: {
+          ...createInitialResumeWizardState().resume_data,
+          personalInfo: { name: 'New in-memory answer' },
+        },
+        asked_count: 2,
+      }),
+    });
+
+    const nativeSetItem = Storage.prototype.setItem;
+    let draftWritesFail = false;
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (key === 'resume_wizard_draft' && draftWritesFail) {
+        throw new DOMException('full', 'QuotaExceededError');
+      }
+      return nativeSetItem.call(this, key, value);
+    });
+
+    render(<ResumeWizardPage />);
+    expect(await screen.findByText('Current question?')).toBeInTheDocument();
+    draftWritesFail = true;
+
+    fireEvent.change(screen.getByRole('textbox'), {
+      target: { value: 'New in-memory answer' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'resumeWizard.actions.continue' }));
+
+    expect(await screen.findByText('Next question?')).toBeInTheDocument();
+    expect(screen.getByText('New in-memory answer')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'resumeWizard.draftStorageUnavailable.description'
+    );
+
+    const blockedReload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(blockedReload);
+    expect(blockedReload.defaultPrevented).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'resumeWizard.actions.backToDashboard' }));
+    expect(push).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toHaveTextContent(
+      'resumeWizard.leaveWithoutDraft.description'
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'resumeWizard.actions.stay' }));
+    expect(push).not.toHaveBeenCalled();
+
+    draftWritesFail = false;
+    fireEvent.click(screen.getByRole('button', { name: 'resumeWizard.actions.retryDraftBackup' }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('resumeWizard.draftStorageUnavailable.description')).toBeNull();
+    });
+    const persisted = JSON.parse(localStorage.getItem('resume_wizard_draft') ?? '{}');
+    expect(persisted.state.resume_data.personalInfo.name).toBe('New in-memory answer');
+
+    const allowedReload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(allowedReload);
+    expect(allowedReload.defaultPrevented).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'resumeWizard.actions.backToDashboard' }));
+    expect(push).toHaveBeenCalledWith('/dashboard');
+  });
+
+  it('leaves an unprotected wizard draft only after explicit confirmation', async () => {
+    push.mockImplementation(() => undefined);
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('full', 'QuotaExceededError');
+    });
+
+    render(<ResumeWizardPage />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'resumeWizard.draftStorageUnavailable.description'
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'resumeWizard.actions.backToDashboard' }));
+    expect(push).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'resumeWizard.actions.leaveWithoutSaving' })
+    );
+    expect(push).toHaveBeenCalledWith('/dashboard');
   });
 });

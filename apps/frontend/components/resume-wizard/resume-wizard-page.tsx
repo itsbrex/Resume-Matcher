@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useStatusCache } from '@/lib/context/status-cache';
 import { useTranslations } from '@/lib/i18n';
 import {
@@ -40,6 +41,8 @@ export function ResumeWizardPage() {
   const [isLoaded, setIsLoaded] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
   const [createdResumeId, setCreatedResumeId] = useState<string | null>(null);
+  const [draftStorageUnavailable, setDraftStorageUnavailable] = useState(false);
+  const [showLeaveWithoutDraftDialog, setShowLeaveWithoutDraftDialog] = useState(false);
 
   useEffect(() => {
     const saved = readResumeWizardDraft();
@@ -49,8 +52,18 @@ export function ResumeWizardPage() {
 
   useEffect(() => {
     if (!isLoaded || state.step === 'complete') return;
-    writeResumeWizardDraft(state);
+    setDraftStorageUnavailable(!writeResumeWizardDraft(state));
   }, [isLoaded, state]);
+
+  useEffect(() => {
+    if (!draftStorageUnavailable) return;
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [draftStorageUnavailable]);
 
   const sectionLabel = t(`resumeWizard.sections.${state.current_question.section}`);
 
@@ -95,6 +108,18 @@ export function ResumeWizardPage() {
       },
     }));
 
+  const handleRetryDraftBackup = () => {
+    setDraftStorageUnavailable(!writeResumeWizardDraft(state));
+  };
+
+  const handleBackToDashboard = () => {
+    if (draftStorageUnavailable) {
+      setShowLeaveWithoutDraftDialog(true);
+      return;
+    }
+    router.push('/dashboard');
+  };
+
   const handleFinalize = async () => {
     if (createdResumeId || isBusy) return;
     setErrorKey(null);
@@ -113,6 +138,8 @@ export function ResumeWizardPage() {
 
     const resumeId = response.resume_id;
     setCreatedResumeId(resumeId);
+    setDraftStorageUnavailable(false);
+    setShowLeaveWithoutDraftDialog(false);
     setState((current) => ({ ...current, step: 'complete' }));
     try {
       localStorage.setItem(MASTER_RESUME_KEY, response.resume_id);
@@ -152,10 +179,29 @@ export function ResumeWizardPage() {
             <h1 className="font-mono text-xs font-bold uppercase tracking-wider text-steel-grey">
               {t('resumeWizard.title')}
             </h1>
-            <Button type="button" variant="ghost" onClick={() => router.push('/dashboard')}>
+            <Button type="button" variant="ghost" onClick={handleBackToDashboard}>
               {t('resumeWizard.actions.backToDashboard')}
             </Button>
           </div>
+
+          {draftStorageUnavailable && state.step !== 'complete' && (
+            <div className="border-2 border-orange-500 bg-orange-50 p-4" role="alert">
+              <p className="font-mono text-sm font-bold uppercase tracking-wider text-orange-700">
+                {t('resumeWizard.draftStorageUnavailable.title')}
+              </p>
+              <p className="mt-1 font-sans text-sm">
+                {t('resumeWizard.draftStorageUnavailable.description')}
+              </p>
+              <Button
+                type="button"
+                variant="warning"
+                className="mt-3"
+                onClick={handleRetryDraftBackup}
+              >
+                {t('resumeWizard.actions.retryDraftBackup')}
+              </Button>
+            </div>
+          )}
 
           {errorKey && (
             <div className="border-2 border-red-600 bg-red-100 p-4" role="alert">
@@ -201,6 +247,17 @@ export function ResumeWizardPage() {
 
         <LivePreview resumeData={state.resume_data} inferredSkills={state.inferred_skills} />
       </div>
+
+      <ConfirmDialog
+        open={showLeaveWithoutDraftDialog}
+        onOpenChange={setShowLeaveWithoutDraftDialog}
+        title={t('resumeWizard.leaveWithoutDraft.title')}
+        description={t('resumeWizard.leaveWithoutDraft.description')}
+        confirmLabel={t('resumeWizard.actions.leaveWithoutSaving')}
+        cancelLabel={t('resumeWizard.actions.stay')}
+        variant="warning"
+        onConfirm={() => router.push('/dashboard')}
+      />
     </main>
   );
 }

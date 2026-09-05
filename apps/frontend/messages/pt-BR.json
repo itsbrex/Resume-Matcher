@@ -958,7 +958,10 @@
       "create": "Criar currículo mestre",
       "keepAdding": "Continuar adicionando",
       "backToDashboard": "Voltar ao painel",
-      "openCreated": "Abrir currículo criado"
+      "openCreated": "Abrir currículo criado",
+      "retryDraftBackup": "Tentar backup local novamente",
+      "stay": "Permanecer aqui",
+      "leaveWithoutSaving": "Sair sem salvar"
     },
     "preview": {
       "label": "Rascunho ao vivo",
@@ -973,6 +976,14 @@
       "turnFailed": "O assistente não conseguiu salvar essa resposta. Tente novamente.",
       "finalizeFailed": "O assistente não conseguiu criar seu currículo mestre. Tente novamente.",
       "createdNavigationFailed": "Seu currículo mestre foi criado, mas esta página não conseguiu abri-lo automaticamente. Use o botão abaixo para continuar."
+    },
+    "draftStorageUnavailable": {
+      "title": "Rascunho local indisponível",
+      "description": "O progresso mais recente do assistente está apenas nesta aba. Tente o backup local novamente antes de sair ou recarregar."
+    },
+    "leaveWithoutDraft": {
+      "title": "Sair sem um backup local?",
+      "description": "O progresso mais recente do assistente será perdido se você sair ou recarregar antes que o backup local seja concluído."
     },
     "entry": {
       "kicker": "Configuração do currículo mestre",

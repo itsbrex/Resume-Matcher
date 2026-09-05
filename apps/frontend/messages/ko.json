@@ -958,7 +958,10 @@
       "create": "마스터 이력서 생성",
       "keepAdding": "계속 추가",
       "backToDashboard": "대시보드로 돌아가기",
-      "openCreated": "생성된 이력서 열기"
+      "openCreated": "생성된 이력서 열기",
+      "retryDraftBackup": "로컬 백업 다시 시도",
+      "stay": "이 페이지에 머물기",
+      "leaveWithoutSaving": "저장하지 않고 나가기"
     },
     "preview": {
       "label": "실시간 초안",
@@ -973,6 +976,14 @@
       "turnFailed": "마법사가 답변을 저장하지 못했습니다. 다시 시도하세요.",
       "finalizeFailed": "마법사가 마스터 이력서를 생성하지 못했습니다. 다시 시도하세요.",
       "createdNavigationFailed": "마스터 이력서를 만들었지만 이 페이지에서 자동으로 열지 못했습니다. 아래 버튼을 사용해 계속하세요."
+    },
+    "draftStorageUnavailable": {
+      "title": "로컬 초안을 사용할 수 없음",
+      "description": "마법사의 최신 진행 상황은 이 탭에만 있습니다. 페이지를 나가거나 새로 고치기 전에 로컬 백업을 다시 시도하세요."
+    },
+    "leaveWithoutDraft": {
+      "title": "로컬 백업 없이 나가시겠습니까?",
+      "description": "로컬 백업이 완료되기 전에 페이지를 나가거나 새로 고치면 마법사의 최신 진행 상황이 사라집니다."
     },
     "entry": {
       "kicker": "마스터 이력서 설정",

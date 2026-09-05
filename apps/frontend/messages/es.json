@@ -958,7 +958,10 @@
       "create": "Crear currículum maestro",
       "keepAdding": "Seguir añadiendo",
       "backToDashboard": "Volver al panel",
-      "openCreated": "Abrir currículum creado"
+      "openCreated": "Abrir currículum creado",
+      "retryDraftBackup": "Reintentar copia local",
+      "stay": "Permanecer aquí",
+      "leaveWithoutSaving": "Salir sin guardar"
     },
     "preview": {
       "label": "Borrador en vivo",
@@ -973,6 +976,14 @@
       "turnFailed": "El asistente no pudo guardar esa respuesta. Inténtalo de nuevo.",
       "finalizeFailed": "El asistente no pudo crear tu currículum maestro. Inténtalo de nuevo.",
       "createdNavigationFailed": "Tu currículum maestro se creó, pero esta página no pudo abrirlo automáticamente. Usa el botón de abajo para continuar."
+    },
+    "draftStorageUnavailable": {
+      "title": "Borrador local no disponible",
+      "description": "El progreso más reciente del asistente solo está en esta pestaña. Reintenta la copia local antes de salir o recargar."
+    },
+    "leaveWithoutDraft": {
+      "title": "¿Salir sin una copia local?",
+      "description": "El progreso más reciente del asistente se perderá si sales o recargas antes de que la copia local se complete."
     },
     "entry": {
       "kicker": "Configuración del currículum maestro",

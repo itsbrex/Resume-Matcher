@@ -958,7 +958,10 @@
       "create": "Créer le CV principal",
       "keepAdding": "Continuer à ajouter",
       "backToDashboard": "Retour au tableau de bord",
-      "openCreated": "Ouvrir le CV créé"
+      "openCreated": "Ouvrir le CV créé",
+      "retryDraftBackup": "Réessayer la sauvegarde locale",
+      "stay": "Rester ici",
+      "leaveWithoutSaving": "Quitter sans enregistrer"
     },
     "preview": {
       "label": "Brouillon en direct",
@@ -973,6 +976,14 @@
       "turnFailed": "L'assistant n'a pas pu enregistrer cette réponse. Veuillez réessayer.",
       "finalizeFailed": "L'assistant n'a pas pu créer votre CV principal. Veuillez réessayer.",
       "createdNavigationFailed": "Votre CV principal a été créé, mais cette page n’a pas pu l’ouvrir automatiquement. Utilisez le bouton ci-dessous pour continuer."
+    },
+    "draftStorageUnavailable": {
+      "title": "Brouillon local indisponible",
+      "description": "La progression la plus récente de l’assistant se trouve uniquement dans cet onglet. Réessayez la sauvegarde locale avant de quitter ou de recharger la page."
+    },
+    "leaveWithoutDraft": {
+      "title": "Quitter sans sauvegarde locale ?",
+      "description": "La progression la plus récente de l’assistant sera perdue si vous quittez ou rechargez la page avant la réussite de la sauvegarde locale."
     },
     "entry": {
       "kicker": "Configuration du CV principal",

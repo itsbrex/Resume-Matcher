@@ -958,7 +958,10 @@
       "create": "创建主简历",
       "keepAdding": "继续添加",
       "backToDashboard": "返回仪表板",
-      "openCreated": "打开已创建的简历"
+      "openCreated": "打开已创建的简历",
+      "retryDraftBackup": "重试本地备份",
+      "stay": "留在此页面",
+      "leaveWithoutSaving": "不保存并离开"
     },
     "preview": {
       "label": "实时草稿",
@@ -973,6 +976,14 @@
       "turnFailed": "向导无法保存该回答。请重试。",
       "finalizeFailed": "向导无法创建你的主简历。请重试。",
       "createdNavigationFailed": "您的主简历已创建，但此页面无法自动打开它。请使用下方按钮继续。"
+    },
+    "draftStorageUnavailable": {
+      "title": "本地草稿不可用",
+      "description": "向导的最新进度仅保留在此标签页中。请在离开或重新加载前重试本地备份。"
+    },
+    "leaveWithoutDraft": {
+      "title": "没有本地备份，仍要离开吗？",
+      "description": "如果在本地备份成功前离开或重新加载，向导的最新进度将会丢失。"
     },
     "entry": {
       "kicker": "主简历设置",

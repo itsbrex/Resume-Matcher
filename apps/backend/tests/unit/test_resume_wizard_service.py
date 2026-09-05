@@ -410,6 +410,9 @@ def test_apply_back_restores_previous_snapshot() -> None:
     state.asked_count = 2
     before = ResumeData()
     before.personalInfo.name = "James"
+    before.workExperience = ResumeData.model_validate(
+        {"workExperience": [{**_GLOBEX_ROLE, "id": 42}]}
+    ).workExperience
     state.history = [
         ResumeWizardHistoryEntry(
             question="Where have you worked?",
@@ -418,7 +421,9 @@ def test_apply_back_restores_previous_snapshot() -> None:
             resume_data_before=before,
         )
     ]
+    state.resume_data = before.model_copy(deep=True)
     state.resume_data.additional.technicalSkills = ["Python"]
+    state.resume_data.workExperience[0].years = "2019 - 2022"
 
     result = apply_back(state)
 
@@ -427,6 +432,9 @@ def test_apply_back_restores_previous_snapshot() -> None:
     assert result.current_question.section == "workExperience"
     assert result.resume_data.additional.technicalSkills == []
     assert result.resume_data.personalInfo.name == "James"
+    assert [(entry.id, entry.years) for entry in result.resume_data.workExperience] == [
+        (42, "2019 - 2021")
+    ]
     assert result.history == []
 
 
@@ -504,6 +512,153 @@ async def test_ai_turn_partial_echo_does_not_drop_prior_experience() -> None:
     assert {e.company for e in result.resume_data.workExperience} == {"Globex", "Acme"}
 
 
+@pytest.mark.parametrize(
+    ("field", "corrected_value"),
+    [
+        ("years", "2019 - 2022"),
+        ("title", "Senior Product Manager"),
+        ("company", "Initech"),
+    ],
+)
+async def test_ai_turn_updates_experience_by_stable_id_without_duplication(
+    field: str,
+    corrected_value: str,
+) -> None:
+    state = _state_on_section("workExperience")
+    state.resume_data = ResumeData.model_validate(
+        {
+            "workExperience": [
+                {**_GLOBEX_ROLE, "id": 7},
+                {**_ACME_ROLE, "id": 11},
+            ]
+        }
+    )
+    correction = {
+        "resume_data": {
+            "workExperience": [
+                {**_GLOBEX_ROLE, "id": 7, field: corrected_value}
+            ]
+        },
+        "next_question": {"text": "Anything else?", "section": "workExperience"},
+        "inferred_skills": [],
+        "is_complete": False,
+    }
+
+    with patch(
+        "app.services.resume_wizard.complete_json",
+        new_callable=AsyncMock,
+        return_value=correction,
+    ):
+        result = await run_ai_turn(state, "Please correct that role", skip=False)
+
+    assert [entry.id for entry in result.resume_data.workExperience] == [7, 11]
+    assert getattr(result.resume_data.workExperience[0], field) == corrected_value
+    assert result.resume_data.workExperience[1].company == "Acme"
+
+
+@pytest.mark.parametrize(
+    ("section", "existing", "corrected", "changed_field", "changed_value"),
+    [
+        (
+            "education",
+            {"id": 13, "institution": "MIT", "degree": "BS", "years": "2014 - 2018"},
+            {
+                "id": 13,
+                "institution": "MIT",
+                "degree": "BSc Computer Science",
+                "years": "2014 - 2018",
+            },
+            "degree",
+            "BSc Computer Science",
+        ),
+        (
+            "personalProjects",
+            {"id": 21, "name": "Atlas", "role": "Creator", "years": "2023"},
+            {"id": 21, "name": "Atlas Platform", "role": "Creator", "years": "2023"},
+            "name",
+            "Atlas Platform",
+        ),
+    ],
+)
+async def test_ai_turn_updates_other_entry_sections_by_stable_id(
+    section: str,
+    existing: dict[str, object],
+    corrected: dict[str, object],
+    changed_field: str,
+    changed_value: str,
+) -> None:
+    state = _state_on_section(section)
+    state.resume_data = ResumeData.model_validate({section: [existing]})
+    response = {
+        "resume_data": {section: [corrected]},
+        "next_question": {"text": "Anything else?", "section": section},
+        "inferred_skills": [],
+        "is_complete": False,
+    }
+
+    with patch(
+        "app.services.resume_wizard.complete_json",
+        new_callable=AsyncMock,
+        return_value=response,
+    ):
+        result = await run_ai_turn(state, "Please correct that entry", skip=False)
+
+    entries = getattr(result.resume_data, section)
+    assert len(entries) == 1
+    assert entries[0].id == existing["id"]
+    assert getattr(entries[0], changed_field) == changed_value
+
+
+async def test_ai_turn_appends_explicit_new_entry_without_reassigning_existing_id() -> None:
+    state = _state_on_section("workExperience")
+    state.resume_data = ResumeData.model_validate(
+        {"workExperience": [{**_GLOBEX_ROLE, "id": 7}]}
+    )
+    addition = {
+        "resume_data": {"workExperience": [{**_ACME_ROLE, "id": 0}]},
+        "next_question": {"text": "More roles?", "section": "workExperience"},
+        "inferred_skills": [],
+        "is_complete": False,
+    }
+
+    with patch(
+        "app.services.resume_wizard.complete_json",
+        new_callable=AsyncMock,
+        return_value=addition,
+    ):
+        result = await run_ai_turn(state, "I also worked at Acme", skip=False)
+
+    assert [(entry.id, entry.company) for entry in result.resume_data.workExperience] == [
+        (7, "Globex"),
+        (8, "Acme"),
+    ]
+
+
+async def test_ai_turn_tells_provider_how_entry_ids_encode_edit_and_add_intent() -> None:
+    state = _state_on_section("workExperience")
+    state.resume_data = ResumeData.model_validate(
+        {"workExperience": [{**_GLOBEX_ROLE, "id": 37}]}
+    )
+    response = {
+        "resume_data": {"workExperience": [{**_GLOBEX_ROLE, "id": 37}]},
+        "next_question": {"text": "Anything else?", "section": "workExperience"},
+        "inferred_skills": [],
+        "is_complete": False,
+    }
+
+    with patch(
+        "app.services.resume_wizard.complete_json",
+        new_callable=AsyncMock,
+        return_value=response,
+    ) as mock_complete:
+        await run_ai_turn(state, "Correct that role", skip=False)
+
+    sent_prompt = mock_complete.call_args.args[0]
+    assert '"id": 37' in sent_prompt
+    assert "same positive id" in sent_prompt
+    assert "id to 0" in sent_prompt
+
+
 async def test_ai_turn_sanitizes_user_answer_before_prompting() -> None:
     # A prompt-injection attempt in the user answer must be redacted before it
     # reaches the LLM prompt (defense-in-depth, mirroring improver.py).
@@ -524,30 +679,35 @@ async def test_ai_turn_sanitizes_user_answer_before_prompting() -> None:
     assert "Ignore previous instructions" not in sent_prompt
 
 
-def test_assign_entry_ids_renumbers_all_three_lists() -> None:
-    # Directly exercise the helper across all three lists (the section-scoped
-    # merge only fills one list per turn, so test the helper itself here).
+def test_assign_entry_ids_preserves_stable_ids_and_allocates_missing_or_duplicate_ids() -> None:
     from app.services.resume_wizard import _assign_entry_ids
 
     data = ResumeData.model_validate(
         {
-            "workExperience": [{"company": "Acme"}, {"company": "Globex"}],
-            "education": [{"institution": "MIT"}, {"institution": "Stanford"}],
-            "personalProjects": [{"name": "Alpha"}, {"name": "Beta"}],
+            "workExperience": [
+                {"id": 7, "company": "Acme"},
+                {"company": "Globex"},
+            ],
+            "education": [
+                {"id": 3, "institution": "MIT"},
+                {"id": 3, "institution": "Stanford"},
+            ],
+            "personalProjects": [
+                {"name": "Alpha"},
+                {"id": 9, "name": "Beta"},
+            ],
         }
     )
-    # All default to id=0 before assignment.
-    assert [e.id for e in data.workExperience] == [0, 0]
 
     _assign_entry_ids(data)
 
-    assert [e.id for e in data.workExperience] == [1, 2]
-    assert [e.id for e in data.education] == [1, 2]
-    assert [p.id for p in data.personalProjects] == [1, 2]
+    assert [entry.id for entry in data.workExperience] == [7, 8]
+    assert [entry.id for entry in data.education] == [3, 4]
+    assert [entry.id for entry in data.personalProjects] == [10, 9]
 
 
 async def test_ai_turn_assigns_unique_entry_ids() -> None:
-    # The LLM omits ids (entries default to id=0); the turn must renumber them
+    # The LLM omits ids (entries default to id=0); the turn must allocate them
     # so the preview keys and the builder's id logic work on a finalized resume.
     state = _state_on_section("workExperience")
     result_no_ids = {

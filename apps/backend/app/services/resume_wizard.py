@@ -4,7 +4,7 @@ import copy
 import json
 import re
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError, field_validator
 
@@ -42,6 +42,13 @@ _VALID_SECTIONS = {
     "skills",
     "review",
 }
+
+
+class _IdentifiedEntry(Protocol):
+    """List entry carrying the stable identity shared with the wizard model."""
+
+    id: int
+
 
 class _ResumeWizardAIEnvelope(BaseModel):
     """Require resume data; omitted or null guidance uses safe defaults."""
@@ -173,30 +180,40 @@ def _next_gap_section(data: ResumeData) -> str:
     return "review"
 
 
-def _merge_entries[T](
+def _merge_entries[T: _IdentifiedEntry](
     existing: list[T],
     updated: list[T],
     key: Callable[[T], tuple[str, ...]],
 ) -> list[T]:
-    """Union list entries by identity signature.
+    """Merge echoed entries by stable id, appending entries declared as new.
 
     A partial model reply (e.g. it echoes only the role the user just described
     instead of the full list) must NOT erase earlier entries. So: existing
-    entries the model omits are kept, entries it echoes (same signature) are
-    replaced in place, and genuinely new entries are appended. Signatures are
-    content-based rather than ``id``-based because wizard entry ids default to 0.
+    entries the model omits are kept, entries retaining a known positive id are
+    replaced in place, and entries without a known id are appended. The content
+    signature remains only as compatibility for unchanged echoes that omit ids.
     """
     result = list(existing)
-    index: dict[tuple[str, ...], int] = {}
+    id_index: dict[int, int] = {}
+    signature_index: dict[tuple[str, ...], int] = {}
     for position, item in enumerate(result):
-        index.setdefault(key(item), position)
+        if item.id > 0:
+            id_index.setdefault(item.id, position)
+        signature_index.setdefault(key(item), position)
     for item in updated:
-        signature = key(item)
-        if signature in index:
-            result[index[signature]] = item
-        else:
-            index[signature] = len(result)
-            result.append(item)
+        position = id_index.get(item.id) if item.id > 0 else None
+        if position is None and item.id <= 0:
+            position = signature_index.get(key(item))
+        if position is not None:
+            item.id = result[position].id
+            result[position] = item
+            signature_index.setdefault(key(item), position)
+            continue
+
+        # A positive id unknown to the current draft is not stable identity.
+        # Treat it as add intent and let the allocator choose a collision-free id.
+        item.id = 0
+        result.append(item)
     return result
 
 
@@ -300,19 +317,24 @@ def _merge_section(
 
 
 def _assign_entry_ids(data: ResumeData) -> None:
-    """Give every list entry a unique 1-based id (in place).
+    """Preserve stable positive ids and allocate ids only for new entries.
 
-    The LLM omits ``id`` (the wizard prompt's schema doesn't request it), so
-    entries default to ``id=0``. Downstream consumers — the live preview's React
-    keys and the builder's ``Math.max(...ids)+1`` add logic — assume unique ids,
-    so renumber them deterministically by position (order is append-stable).
+    Downstream consumers use ids for React keys and builder updates. An id echoed
+    from the current draft must therefore survive corrections; omitted, invalid,
+    or duplicate ids receive monotonically increasing replacements.
     """
-    for index, item in enumerate(data.workExperience, start=1):
-        item.id = index
-    for index, item in enumerate(data.education, start=1):
-        item.id = index
-    for index, item in enumerate(data.personalProjects, start=1):
-        item.id = index
+    for entries in (data.workExperience, data.education, data.personalProjects):
+        next_id = max((item.id for item in entries if item.id > 0), default=0) + 1
+        used: set[int] = set()
+        for item in entries:
+            if item.id > 0 and item.id not in used:
+                used.add(item.id)
+                continue
+            while next_id in used:
+                next_id += 1
+            item.id = next_id
+            used.add(item.id)
+            next_id += 1
 
 
 def _next_question(

@@ -30,7 +30,8 @@
     "unknown": "Unknown",
     "keysCleared": "API keys cleared successfully",
     "databaseReset": "Database reset successfully",
-    "popupBlocked": "Popup blocked. Please allow popups or open this URL manually: {url}"
+    "popupBlocked": "Popup blocked. Please allow popups or open this URL manually: {url}",
+    "resumeDeleted": "This resume was deleted. Upload or select another resume."
   },
   "home": {
     "brandLine1": "Resume",

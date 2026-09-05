@@ -30,7 +30,8 @@
     "unknown": "Inconnu",
     "keysCleared": "Clés API supprimées avec succès",
     "databaseReset": "Base de données réinitialisée avec succès",
-    "popupBlocked": "Fenêtre contextuelle bloquée. Veuillez autoriser les fenêtres contextuelles ou ouvrir cette URL manuellement : {url}"
+    "popupBlocked": "Fenêtre contextuelle bloquée. Veuillez autoriser les fenêtres contextuelles ou ouvrir cette URL manuellement : {url}",
+    "resumeDeleted": "Ce CV a été supprimé. Importez ou sélectionnez un autre CV."
   },
   "home": {
     "brandLine1": "Resume",

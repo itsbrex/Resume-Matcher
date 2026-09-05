@@ -30,7 +30,8 @@
     "unknown": "Desconhecido",
     "keysCleared": "Chaves de API removidas com sucesso",
     "databaseReset": "Banco de dados redefinido com sucesso",
-    "popupBlocked": "Popup bloqueado. Por favor, permita popups ou abra esta URL manualmente: {url}"
+    "popupBlocked": "Popup bloqueado. Por favor, permita popups ou abra esta URL manualmente: {url}",
+    "resumeDeleted": "Este currículo foi excluído. Envie ou selecione outro currículo."
   },
   "home": {
     "brandLine1": "Resume",

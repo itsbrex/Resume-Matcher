@@ -188,12 +188,25 @@ it('discards a processing retry after close and allows a new upload immediately'
     retry.resolve({
       resume_id: 'failed',
       processing_status: 'ready',
-      message: 'ready',
-      request_id: 'synthetic-request',
-      is_master: true,
     })
   );
   expect(onComplete).not.toHaveBeenCalled();
   expect(screen.getByRole('dialog')).toBeInTheDocument();
+  expect(document.querySelector('input[type="file"]')).not.toBeDisabled();
+});
+
+it('shows a deleted-record message and allows another file after retry returns 404', async () => {
+  vi.mocked(fetch).mockResolvedValueOnce(
+    new Response(JSON.stringify({ resume_id: 'gone', processing_status: 'failed' }), {
+      headers: { 'content-type': 'application/json' },
+    })
+  );
+  vi.mocked(retryProcessing).mockRejectedValueOnce(
+    new Error('Failed to retry processing (status 404)')
+  );
+  render(<ControlledDialog onUploadComplete={vi.fn()} />);
+  chooseResume();
+  fireEvent.click(await screen.findByRole('button', { name: 'dashboard.retryProcessing' }));
+  expect(await screen.findByText('common.resumeDeleted')).toBeVisible();
   expect(document.querySelector('input[type="file"]')).not.toBeDisabled();
 });

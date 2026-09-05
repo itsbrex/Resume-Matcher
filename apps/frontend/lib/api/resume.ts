@@ -375,8 +375,15 @@ export async function generateInterviewPrep(resumeId: string): Promise<Interview
 }
 
 /** Retries AI processing for a failed resume */
-export async function retryProcessing(resumeId: string): Promise<ResumeUploadResponse> {
+export async function retryProcessing(
+  resumeId: string
+): Promise<Pick<ResumeUploadResponse, 'resume_id' | 'processing_status'>> {
   const res = await apiPost(`/resumes/${encodeURIComponent(resumeId)}/retry-processing`, {});
+  if (res.status === 409) {
+    // Another attempt owns the row. Observe it instead of labeling it failed.
+    const current = await fetchResume(resumeId);
+    return { resume_id: resumeId, processing_status: current.raw_resume.processing_status };
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(`Failed to retry processing (status ${res.status}): ${text}`);

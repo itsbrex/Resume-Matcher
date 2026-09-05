@@ -311,6 +311,12 @@ export default function DashboardPage() {
     } catch (err) {
       if (!isCurrent()) return;
       console.error('Retry processing failed:', err);
+      if (err instanceof Error && err.message.includes('status 404')) {
+        localStorage.removeItem('master_resume_id');
+        adoptMasterResume(null);
+        setHasMasterResume(false);
+        return;
+      }
       setProcessingStatus('failed');
     } finally {
       if (isCurrent()) {

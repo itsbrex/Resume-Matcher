@@ -1,7 +1,13 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ResumeViewerPage from '@/app/(default)/resumes/[id]/page';
-import { deleteResume, downloadResumePdf, fetchResume, renameResume } from '@/lib/api/resume';
+import {
+  deleteResume,
+  downloadResumePdf,
+  fetchResume,
+  renameResume,
+  retryProcessing,
+} from '@/lib/api/resume';
 import { openUrlInNewTab } from '@/lib/utils/download';
 
 const push = vi.fn();
@@ -112,4 +118,25 @@ describe('resume viewer operation errors', () => {
     expect(mockedDelete).toHaveBeenCalledTimes(2);
     expect(decrementResumes).toHaveBeenCalledTimes(1);
   });
+});
+
+it('shows deletion instead of a processing failure when retry returns 404', async () => {
+  mockedFetch.mockResolvedValue({
+    ...(await mockedFetch('resume-123')),
+    processed_resume: null,
+    raw_resume: {
+      id: null,
+      content: '',
+      content_type: 'text/plain',
+      created_at: '2026-01-01',
+      processing_status: 'failed',
+    },
+  });
+  vi.mocked(retryProcessing).mockRejectedValueOnce(
+    new Error('Failed to retry processing (status 404)')
+  );
+  render(<ResumeViewerPage />);
+  fireEvent.click(await screen.findByRole('button', { name: 'resumeViewer.retryProcessing' }));
+  expect(await screen.findByText('common.resumeDeleted')).toBeVisible();
+  expect(screen.queryByRole('button', { name: 'resumeViewer.retryProcessing' })).toBeNull();
 });

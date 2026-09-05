@@ -46,7 +46,7 @@ export function ResumeUploadDialog({
   const { t } = useTranslations();
   const [internalOpen, setInternalOpen] = useState(false);
   const [uploadFeedback, setUploadFeedback] = useState<{
-    type: 'success' | 'error';
+    type: 'success' | 'error' | 'pending';
     message: string;
   } | null>(null);
   const [failedResumeId, setFailedResumeId] = useState<string | null>(null);
@@ -211,7 +211,11 @@ export function ResumeUploadDialog({
       const result = await retryProcessing(resumeIdToRetry);
       if (owner !== retryOwnerRef.current) return;
       if (result.processing_status !== 'ready') {
-        setUploadFeedback({ type: 'error', message: t('dashboard.retryFailed') });
+        setUploadFeedback(
+          result.processing_status === 'failed'
+            ? { type: 'error', message: t('dashboard.retryFailed') }
+            : { type: 'pending', message: t(`dashboard.status.${result.processing_status}`) }
+        );
         return;
       }
 
@@ -223,6 +227,12 @@ export function ResumeUploadDialog({
     } catch (err) {
       if (owner !== retryOwnerRef.current) return;
       console.error('Retry processing failed:', err);
+      if (err instanceof Error && err.message.includes('status 404')) {
+        clearFiles();
+        setFailedResumeId(null);
+        setUploadFeedback({ type: 'error', message: t('common.resumeDeleted') });
+        return;
+      }
       setUploadFeedback({ type: 'error', message: t('dashboard.retryFailed') });
     } finally {
       if (owner === retryOwnerRef.current) {
@@ -328,6 +338,12 @@ export function ResumeUploadDialog({
                 ))}
               </div>
             </div>
+          )}
+
+          {uploadFeedback?.type === 'pending' && (
+            <p role="status" className="mt-4 border border-black p-3 font-mono text-sm">
+              {uploadFeedback.message}
+            </p>
           )}
 
           {uploadFeedback?.type === 'success' && (

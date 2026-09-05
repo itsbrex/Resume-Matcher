@@ -327,4 +327,17 @@ describe('dashboard refresh ownership', () => {
     await act(async () => vi.advanceTimersByTimeAsync(30000));
     expect(api.get).toHaveBeenCalledTimes(13);
   });
+
+  it('clears a master deleted while retry processing is pending', async () => {
+    api.list.mockResolvedValue([row('master', true)]);
+    api.get.mockResolvedValue(status('failed'));
+    api.retry.mockRejectedValue(new Error('Failed to retry processing (status 404)'));
+    render(<Dashboard />);
+    await act(async () => {});
+    await act(async () =>
+      screen.getAllByRole('button', { name: 'dashboard.retryProcessing' })[0].click()
+    );
+    expect(localStorage.getItem('master_resume_id')).toBeNull();
+    expect(screen.getByRole('button', { name: 'dashboard.initializeMasterResume' })).toBeVisible();
+  });
 });

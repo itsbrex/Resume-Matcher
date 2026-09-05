@@ -30,7 +30,8 @@
     "unknown": "Desconocido",
     "keysCleared": "Claves API borradas con éxito",
     "databaseReset": "Base de datos restablecida con éxito",
-    "popupBlocked": "Se bloqueó la ventana emergente. Permite las ventanas emergentes o abre manualmente esta URL: {url}"
+    "popupBlocked": "Se bloqueó la ventana emergente. Permite las ventanas emergentes o abre manualmente esta URL: {url}",
+    "resumeDeleted": "Este currículum se eliminó. Sube o selecciona otro."
   },
   "home": {
     "brandLine1": "Currículum",

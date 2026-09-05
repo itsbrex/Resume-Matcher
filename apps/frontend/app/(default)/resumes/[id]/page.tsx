@@ -118,15 +118,31 @@ export default function ResumeViewerPage() {
     setIsRetrying(true);
     try {
       const result = await retryProcessing(resumeId);
+      setProcessingStatus(result.processing_status);
       if (result.processing_status === 'ready') {
         // Reload the page to show the processed resume
         window.location.reload();
       } else {
-        setError(t('resumeViewer.errors.processingFailed'));
+        setError(
+          t(
+            result.processing_status === 'failed'
+              ? 'resumeViewer.errors.processingFailed'
+              : 'resumeViewer.errors.stillProcessing'
+          )
+        );
       }
     } catch (err) {
       console.error('Retry processing failed:', err);
-      setError(t('resumeViewer.errors.processingFailed'));
+      if (err instanceof Error && err.message.includes('status 404')) {
+        setProcessingStatus(null);
+        setError(t('common.resumeDeleted'));
+        if (localStorage.getItem('master_resume_id') === resumeId) {
+          localStorage.removeItem('master_resume_id');
+          setHasMasterResume(false);
+        }
+      } else {
+        setError(t('resumeViewer.errors.processingFailed'));
+      }
     } finally {
       setIsRetrying(false);
     }

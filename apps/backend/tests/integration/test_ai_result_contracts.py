@@ -361,6 +361,31 @@ async def test_keyword_service_accepts_explicit_empty_lists(
 
 
 @pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("key_responsibilities", None),
+        ("experience_requirements", {"years": 5}),
+        ("education_requirements", "Bachelor's degree"),
+    ],
+)
+async def test_keyword_service_rejects_malformed_optional_list_fields(
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    invalid_value: object,
+) -> None:
+    result = {
+        "required_skills": [],
+        "preferred_skills": [],
+        "keywords": [],
+        field: invalid_value,
+    }
+    monkeypatch.setattr(improver, "complete_json", AsyncMock(return_value=result))
+
+    with pytest.raises(ValueError, match=field):
+        await improver.extract_job_keywords("General role")
+
+
+@pytest.mark.parametrize(
     "provider_result",
     [{}, {"target_skills": "Python"}, {"target_skills": [{"skill": 3}]}],
 )

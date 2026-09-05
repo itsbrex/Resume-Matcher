@@ -53,10 +53,17 @@ def _validate_string_list_field(
 
 
 def _validate_keyword_result(result: dict[str, Any]) -> dict[str, Any]:
-    """Validate the task-bearing keyword fields while allowing empty lists."""
+    """Validate keyword fields consumed by tailoring while allowing sparse output."""
     validated = dict(result)
     for field in ("required_skills", "preferred_skills", "keywords"):
         validated[field] = _validate_string_list_field(result, field)
+    for field in (
+        "experience_requirements",
+        "education_requirements",
+        "key_responsibilities",
+    ):
+        if field in result:
+            validated[field] = _validate_string_list_field(result, field)
     return validated
 
 

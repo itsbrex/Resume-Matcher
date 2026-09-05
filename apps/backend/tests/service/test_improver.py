@@ -1,6 +1,7 @@
 """Service tests for improver — async functions with mocked LLM."""
 
 import copy
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -122,7 +123,12 @@ class TestGenerateResumeDiffs:
             )
 
     @patch("app.services.improver.complete_json", new_callable=AsyncMock)
-    async def test_rejects_non_dict_changes(self, mock_llm, sample_resume, sample_job_keywords):
+    async def test_rejects_non_dict_changes(
+        self,
+        mock_llm: AsyncMock,
+        sample_resume: dict[str, Any],
+        sample_job_keywords: dict[str, Any],
+    ) -> None:
         """Invalid entries reject the response so content retry can replace it."""
         mock_llm.return_value = {
             "changes": [
@@ -142,7 +148,12 @@ class TestGenerateResumeDiffs:
             )
 
     @patch("app.services.improver.complete_json", new_callable=AsyncMock)
-    async def test_invalid_action_in_change_is_rejected(self, mock_llm, sample_resume, sample_job_keywords):
+    async def test_invalid_action_in_change_is_rejected(
+        self,
+        mock_llm: AsyncMock,
+        sample_resume: dict[str, Any],
+        sample_job_keywords: dict[str, Any],
+    ) -> None:
         """An invalid action rejects the response instead of hiding a bad leaf."""
         mock_llm.return_value = {
             "changes": [

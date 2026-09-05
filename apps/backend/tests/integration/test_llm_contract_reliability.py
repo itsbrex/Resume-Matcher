@@ -3,12 +3,14 @@
 import asyncio
 import json
 from typing import Any
+from unittest.mock import AsyncMock
 
 import litellm
 import pytest
 
 from app import llm
 from app.llm import LLMConfig
+from app.services import improver
 
 
 CONFIG = LLMConfig(provider="openai", model="gpt-4o", api_key="synthetic")
@@ -123,6 +125,44 @@ async def test_recovered_transport_retry_accepts_legitimate_sparse_resume(
 
     assert result == sparse
     assert calls == 2
+
+
+async def test_content_retry_repairs_malformed_optional_keyword_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A consumed optional field is repaired before suggestions can slice it."""
+    malformed = {
+        "required_skills": [],
+        "preferred_skills": [],
+        "keywords": [],
+        "key_responsibilities": None,
+    }
+    repaired = {
+        "required_skills": [],
+        "preferred_skills": [],
+        "keywords": [],
+        "key_responsibilities": ["Lead reliable API delivery"],
+    }
+    router = AsyncMock()
+    router.acompletion.side_effect = [_response(malformed), _response(repaired)]
+    monkeypatch.setattr(llm, "get_router", lambda _config=None: (router, CONFIG))
+    monkeypatch.setattr(llm, "_supports_json_mode", lambda _model: False)
+
+    result = await llm.complete_json(
+        "synthetic job",
+        retries=1,
+        schema_type="keywords",
+        response_validator=improver._validate_keyword_result,
+    )
+    suggestions = improver.generate_improvements(result)
+
+    assert router.acompletion.await_count == 2
+    assert suggestions == [
+        {
+            "suggestion": "Aligned experience with: Lead reliable API delivery",
+            "lineNumber": None,
+        }
+    ]
 
 
 async def test_real_router_propagates_cancellation_without_retry(

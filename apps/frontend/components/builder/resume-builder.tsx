@@ -282,6 +282,8 @@ const ResumeBuilderContent = () => {
   const outreachEditVersionRef = useRef(0);
   const coverLetterSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const coverLetterSaveCountRef = useRef(0);
+  const outreachSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const outreachSaveCountRef = useRef(0);
   const [isCopied, setIsCopied] = useState(false);
   const [resumeTitle, setResumeTitle] = useState<string | null>(null);
 
@@ -1005,22 +1007,19 @@ const ResumeBuilderContent = () => {
   };
 
   // Cover letter handlers
-  const queueCoverLetterSave = (activeResumeId: string, content: string): Promise<void> => {
-    const save = coverLetterSaveQueueRef.current
-      .catch(() => {
-        // Keep the document-owned queue available after a failed request.
-      })
-      .then(() => {
-        if (!documentIsActiveRef.current) {
-          throw new DOMException('Editor closed', 'AbortError');
-        }
-        return updateCoverLetter(activeResumeId, content);
-      });
-    coverLetterSaveQueueRef.current = save.then(
+  const queueAttachmentWrite = <T,>(
+    queue: React.RefObject<Promise<void>>,
+    action: () => Promise<T>
+  ): Promise<T> => {
+    const operation = queue.current.then(() => {
+      if (!documentIsActiveRef.current) throw new DOMException('Editor closed', 'AbortError');
+      return action();
+    });
+    queue.current = operation.then(
       () => undefined,
       () => undefined
     );
-    return save;
+    return operation;
   };
 
   const handleSaveCoverLetter = async (
@@ -1034,7 +1033,9 @@ const ResumeBuilderContent = () => {
     try {
       coverLetterSaveCountRef.current += 1;
       setIsCoverLetterSaving(true);
-      await queueCoverLetterSave(activeResumeId, savedContent);
+      await queueAttachmentWrite(coverLetterSaveQueueRef, () =>
+        updateCoverLetter(activeResumeId, savedContent)
+      );
       if (!documentIsActiveRef.current) return false;
       const baselines = { ...attachmentBaselinesRef.current, coverLetter: savedContent };
       attachmentBaselinesRef.current = baselines;
@@ -1063,12 +1064,14 @@ const ResumeBuilderContent = () => {
     }
   };
 
-  const flushCoverLetterForExport = async (): Promise<boolean> => {
+  const flushCoverLetterForExport = async (showFailure = true): Promise<boolean> => {
     while (documentIsActiveRef.current) {
+      await coverLetterSaveQueueRef.current;
+      if (!documentIsActiveRef.current) return false;
       if (attachmentValuesRef.current.coverLetter === attachmentBaselinesRef.current.coverLetter) {
         return true;
       }
-      if (!(await handleSaveCoverLetter(false))) {
+      if (!(await handleSaveCoverLetter(false, showFailure))) {
         return false;
       }
     }
@@ -1076,16 +1079,21 @@ const ResumeBuilderContent = () => {
   };
 
   const flushAttachmentChanges = async (): Promise<boolean> => {
-    let didSave = true;
-    if (attachmentValuesRef.current.coverLetter !== attachmentBaselinesRef.current.coverLetter) {
-      didSave = (await handleSaveCoverLetter(false, false)) && didSave;
+    while (documentIsActiveRef.current) {
+      if (!(await flushCoverLetterForExport(false))) return false;
+      await outreachSaveQueueRef.current;
+      if (!documentIsActiveRef.current) return false;
+      if (
+        attachmentValuesRef.current.outreachMessage !==
+        attachmentBaselinesRef.current.outreachMessage
+      ) {
+        if (!(await handleSaveOutreach(false, false))) return false;
+        continue;
+      }
+      if (attachmentValuesRef.current.coverLetter === attachmentBaselinesRef.current.coverLetter)
+        return true;
     }
-    if (
-      attachmentValuesRef.current.outreachMessage !== attachmentBaselinesRef.current.outreachMessage
-    ) {
-      didSave = (await handleSaveOutreach(false, false)) && didSave;
-    }
-    return didSave;
+    return false;
   };
 
   const handleDownloadCoverLetter = async () => {
@@ -1134,8 +1142,11 @@ const ResumeBuilderContent = () => {
     const savedContent = attachmentValuesRef.current.outreachMessage;
     const savedVersion = outreachEditVersionRef.current;
     try {
+      outreachSaveCountRef.current += 1;
       setIsOutreachSaving(true);
-      await updateOutreachMessage(activeResumeId, savedContent);
+      await queueAttachmentWrite(outreachSaveQueueRef, () =>
+        updateOutreachMessage(activeResumeId, savedContent)
+      );
       if (!documentIsActiveRef.current) return false;
       const baselines = { ...attachmentBaselinesRef.current, outreachMessage: savedContent };
       attachmentBaselinesRef.current = baselines;
@@ -1157,7 +1168,8 @@ const ResumeBuilderContent = () => {
       }
       return false;
     } finally {
-      if (documentIsActiveRef.current) setIsOutreachSaving(false);
+      outreachSaveCountRef.current = Math.max(0, outreachSaveCountRef.current - 1);
+      if (documentIsActiveRef.current) setIsOutreachSaving(outreachSaveCountRef.current > 0);
     }
   }
 
@@ -1178,8 +1190,11 @@ const ResumeBuilderContent = () => {
     setIsGeneratingCoverLetter(true);
     setShowRegenerateDialog(null);
     try {
-      const content = await generateCoverLetter(activeResumeId);
+      const content = await queueAttachmentWrite(coverLetterSaveQueueRef, () =>
+        generateCoverLetter(activeResumeId)
+      );
       if (!documentIsActiveRef.current) return;
+      coverLetterEditVersionRef.current += 1;
       setCoverLetter(content);
       attachmentValuesRef.current = { ...attachmentValuesRef.current, coverLetter: content };
       attachmentBaselinesRef.current = {
@@ -1217,8 +1232,11 @@ const ResumeBuilderContent = () => {
     setIsGeneratingOutreach(true);
     setShowRegenerateDialog(null);
     try {
-      const content = await generateOutreachMessage(activeResumeId);
+      const content = await queueAttachmentWrite(outreachSaveQueueRef, () =>
+        generateOutreachMessage(activeResumeId)
+      );
       if (!documentIsActiveRef.current) return;
+      outreachEditVersionRef.current += 1;
       setOutreachMessage(content);
       attachmentValuesRef.current = { ...attachmentValuesRef.current, outreachMessage: content };
       attachmentBaselinesRef.current = {

@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ResumeData } from '@/components/dashboard/resume-component';
 
@@ -395,4 +395,91 @@ it('does not expose attachment state from an unusable resume response', async ()
   render(<Builder />);
   await waitFor(() => expect(fetchResume).toHaveBeenCalled());
   expect(screen.queryByDisplayValue('UNUSABLE COVER')).not.toBeInTheDocument();
+});
+
+it('waits for an earlier cover save even after reverting to the acknowledged baseline', async () => {
+  const first = deferred<void>();
+  const latest = deferred<void>();
+  fetchResume.mockResolvedValue(response({ cover_letter: 'SERVER COVER' }));
+  updateCoverLetter.mockReturnValueOnce(first.promise).mockReturnValueOnce(latest.promise);
+  const Builder = await importBuilder();
+  render(<Builder />);
+  const editor = await screen.findByDisplayValue('SERVER COVER');
+  fireEvent.change(editor, { target: { value: 'INTERMEDIATE' } });
+  await act(async () => screen.getByRole('button', { name: 'common.save' }).click());
+  fireEvent.change(editor, { target: { value: 'SERVER COVER' } });
+  await act(async () => screen.getByRole('button', { name: 'common.download' }).click());
+  expect(downloadCoverLetterPdf).not.toHaveBeenCalled();
+  await act(async () => first.resolve());
+  expect(updateCoverLetter).toHaveBeenNthCalledWith(2, 'a', 'SERVER COVER');
+  expect(downloadCoverLetterPdf).not.toHaveBeenCalled();
+  await act(async () => latest.resolve());
+  expect(downloadCoverLetterPdf).toHaveBeenCalledOnce();
+});
+
+it.each(['cover-letter', 'outreach'])(
+  'serializes and converges %s edits before Back',
+  async (tab) => {
+    const first = deferred<void>();
+    const second = deferred<void>();
+    const third = deferred<void>();
+    const save = tab === 'cover-letter' ? updateCoverLetter : updateOutreachMessage;
+    currentSearch = `id=a&tab=${tab}`;
+    fetchResume.mockResolvedValue(response({ cover_letter: 'SERVER', outreach_message: 'SERVER' }));
+    save
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+      .mockReturnValueOnce(third.promise);
+    const Builder = await importBuilder();
+    render(<Builder />);
+    const editor = await screen.findByDisplayValue('SERVER');
+    fireEvent.change(editor, { target: { value: 'FIRST' } });
+    await act(async () => screen.getByRole('button', { name: 'common.save' }).click());
+    fireEvent.change(editor, { target: { value: 'SECOND' } });
+    await act(async () => screen.getByRole('button', { name: 'nav.backToDashboard' }).click());
+    expect(save).toHaveBeenCalledTimes(1);
+    await act(async () => first.resolve());
+    expect(save).toHaveBeenNthCalledWith(2, 'a', 'SECOND');
+    fireEvent.change(editor, { target: { value: 'FINAL' } });
+    await act(async () => second.resolve());
+    expect(push).not.toHaveBeenCalled();
+    expect(save).toHaveBeenNthCalledWith(3, 'a', 'FINAL');
+    await act(async () => third.resolve());
+    expect(push).toHaveBeenCalledWith('/dashboard');
+  }
+);
+
+it.each(['cover-letter', 'outreach'])('orders %s generation after prior saves', async (tab) => {
+  const first = deferred<void>();
+  const generated = deferred<string>();
+  const save = tab === 'cover-letter' ? updateCoverLetter : updateOutreachMessage;
+  const generate = tab === 'cover-letter' ? generateCoverLetter : generateOutreachMessage;
+  currentSearch = `id=a&tab=${tab}`;
+  fetchResume.mockResolvedValue(response({ cover_letter: 'SERVER', outreach_message: 'SERVER' }));
+  save.mockReturnValueOnce(first.promise);
+  generate.mockReturnValueOnce(generated.promise);
+  const Builder = await importBuilder();
+  render(<Builder />);
+  fireEvent.change(await screen.findByDisplayValue('SERVER'), { target: { value: 'EDIT' } });
+  await act(async () => screen.getByRole('button', { name: 'common.save' }).click());
+  fireEvent.click(
+    screen.getByRole('button', {
+      name: tab === 'cover-letter' ? 'coverLetter.regenerate' : 'outreach.regenerate',
+    })
+  );
+  await act(async () =>
+    within(screen.getByRole('dialog'))
+      .getByRole('button', {
+        name: tab === 'cover-letter' ? 'coverLetter.regenerate' : 'outreach.regenerate',
+      })
+      .click()
+  );
+  expect(generate).not.toHaveBeenCalled();
+  await act(async () => first.resolve());
+  expect(generate).toHaveBeenCalledOnce();
+  await act(async () => generated.resolve('GENERATED'));
+  expect(screen.getByDisplayValue('GENERATED')).toBeInTheDocument();
+  const unload = new Event('beforeunload', { cancelable: true });
+  window.dispatchEvent(unload);
+  expect(unload.defaultPrevented).toBe(false);
 });

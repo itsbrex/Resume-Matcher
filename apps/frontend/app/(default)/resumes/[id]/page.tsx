@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -53,6 +53,7 @@ export default function ResumeViewerPage() {
   const [isRetrying, setIsRetrying] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [resumeTitle, setResumeTitle] = useState<string | null>(null);
+  const renameBusyRef = useRef(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editingTitleValue, setEditingTitleValue] = useState('');
   const [isTailoredResume, setIsTailoredResume] = useState(false);
@@ -140,11 +141,14 @@ export default function ResumeViewerPage() {
   };
 
   const handleTitleSave = async () => {
+    if (renameBusyRef.current) return;
     const trimmed = editingTitleValue.trim();
     if (!trimmed || trimmed === resumeTitle) {
       setIsEditingTitle(false);
       return;
     }
+    renameBusyRef.current = true;
+    setIsEditingTitle(false);
     try {
       setRenameError(null);
       await renameResume(resumeId, trimmed);
@@ -153,6 +157,8 @@ export default function ResumeViewerPage() {
     } catch (err) {
       console.error('Failed to rename resume:', err);
       setRenameError(t('resumeViewer.errors.failedToRename'));
+    } finally {
+      renameBusyRef.current = false;
     }
   };
 
@@ -196,7 +202,7 @@ export default function ResumeViewerPage() {
         const fallbackUrl = getResumePdfUrl(resumeId, undefined, uiLanguage);
         const didOpen = openUrlInNewTab(fallbackUrl);
         if (!didOpen) {
-          setDownloadError(t('resumeViewer.errors.failedToDownload'));
+          setDownloadError(t('common.popupBlocked', { url: fallbackUrl }));
         }
         return;
       }

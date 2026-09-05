@@ -69,10 +69,18 @@ describe('resume viewer operation errors', () => {
     await act(async () => downloadButton.click());
 
     expect(await screen.findByText('resumeViewer.downloadFailedTitle')).toBeInTheDocument();
-    expect(screen.getByText('resumeViewer.errors.failedToDownload')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        failure instanceof TypeError
+          ? 'common.popupBlocked'
+          : 'resumeViewer.errors.failedToDownload'
+      )
+    ).toBeInTheDocument();
     mockedDownload.mockResolvedValue(new Blob(['pdf']));
     await act(async () => screen.getByRole('button', { name: 'common.retry' }).click());
     expect(mockedDownload).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText('common.success')).toBeInTheDocument();
+    expect(screen.queryByText('resumeViewer.downloadFailedTitle')).not.toBeInTheDocument();
   });
 
   it('retains the edited title and offers retry after rename failure', async () => {
@@ -82,7 +90,8 @@ describe('resume viewer operation errors', () => {
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Edited title' } });
     await act(async () => fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' }));
 
-    expect(screen.getByRole('textbox')).toHaveValue('Edited title');
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(mockedRename).toHaveBeenCalledTimes(1);
     expect(screen.getByText('resumeViewer.renameFailedTitle')).toBeInTheDocument();
     await act(async () => screen.getByRole('button', { name: 'common.retry' }).click());
     await waitFor(() => expect(screen.getByRole('button', { name: 'Edited title' })).toBeVisible());

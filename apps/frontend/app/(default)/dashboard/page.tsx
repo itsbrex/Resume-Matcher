@@ -325,30 +325,30 @@ export default function DashboardPage() {
   // Using the hex values from before to maintain exact look, or we could map them to variants
   const fillerPalette = ['bg-secondary', 'bg-[#D8D8D2]', 'bg-[#CFCFC7]', 'bg-[#E0E0D8]'];
 
-  if (listError) {
-    return (
-      <div
-        role="alert"
-        className="m-6 rounded-none border-2 border-red-600 bg-red-100 p-6 shadow-sw-default"
-      >
-        <div className="flex items-start gap-3">
-          <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
-          <div>
-            <p className="font-mono text-sm font-bold uppercase text-red-600">
-              {t('dashboard.errors.loadFailed')}
-            </p>
-            <Button className="mt-4" variant="outline" onClick={loadTailoredResumes}>
-              <RefreshCw className="h-4 w-4" />
-              {t('common.retry')}
-            </Button>
-          </div>
+  const listErrorAlert = listError ? (
+    <div
+      role="alert"
+      className="m-6 rounded-none border-2 border-red-600 bg-red-100 p-6 shadow-sw-default"
+    >
+      <div className="flex items-start gap-3">
+        <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
+        <div>
+          <p className="font-mono text-sm font-bold uppercase text-red-600">
+            {t('dashboard.errors.loadFailed')}
+          </p>
+          <Button className="mt-4" variant="outline" onClick={loadTailoredResumes}>
+            <RefreshCw className="h-4 w-4" />
+            {t('common.retry')}
+          </Button>
         </div>
       </div>
-    );
-  }
+    </div>
+  ) : null;
+  if (listError && !masterResumeId && tailoredResumes.length === 0) return listErrorAlert;
 
   return (
     <div className="space-y-6">
+      {listErrorAlert}
       {/* Configuration Warning Banner */}
       {masterResumeId && !isLlmConfigured && !statusLoading && (
         <div className="border-2 border-warning bg-amber-50 p-4 shadow-sw-default mb-6 flex items-center justify-between">

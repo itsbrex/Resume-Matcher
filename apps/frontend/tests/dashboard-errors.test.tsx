@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Dashboard from '@/app/(default)/dashboard/page';
 
@@ -89,7 +89,9 @@ describe('dashboard recoverable errors', () => {
     });
     fireEvent.click(deleteButton);
     await act(async () =>
-      screen.getAllByRole('button', { name: 'dashboard.deleteAndReupload' }).at(-1)?.click()
+      within(screen.getByRole('dialog'))
+        .getByRole('button', { name: 'dashboard.deleteAndReupload' })
+        .click()
     );
 
     expect(localStorage.getItem('master_resume_id')).toBe('master');
@@ -97,4 +99,14 @@ describe('dashboard recoverable errors', () => {
     await act(async () => screen.getByRole('button', { name: 'common.retry' }).click());
     expect(remove).toHaveBeenCalledTimes(2);
   });
+});
+
+it('keeps existing master controls available when a list refresh fails', async () => {
+  list.mockResolvedValueOnce([row('master', true)]).mockRejectedValue(new Error('offline'));
+  get.mockResolvedValue({ processed_resume: null, raw_resume: { processing_status: 'failed' } });
+  render(<Dashboard />);
+  await screen.findByRole('button', { name: 'dashboard.deleteAndReupload' });
+  fireEvent.focus(window);
+  await screen.findByRole('alert');
+  expect(screen.getByRole('button', { name: 'dashboard.deleteAndReupload' })).toBeInTheDocument();
 });

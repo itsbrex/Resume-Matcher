@@ -4,7 +4,7 @@ import {
   safeStorage,
 } from '@/lib/utils/resume-draft-storage';
 
-const ATTACHMENT_DRAFT_STORAGE_PREFIX = 'resume_builder_attachment_draft:';
+export const ATTACHMENT_DRAFT_STORAGE_PREFIX = 'resume_builder_attachment_draft:';
 
 export interface AttachmentDraftEnvelope {
   resumeId: string;

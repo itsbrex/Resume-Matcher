@@ -234,6 +234,36 @@ class TestSupportsTemperature:
         assert _supports_temperature("openai/kimi-k2.6", 1.0) is True
 
     @patch("app.llm.litellm.get_model_info")
+    def test_gpt5_only_allows_default(self, mock_get_model_info):
+        """gpt-5 accepts only temperature=1, on OpenAI and Azure alike."""
+        mock_get_model_info.return_value = {
+            "supported_openai_params": ["temperature", "max_tokens"]
+        }
+        assert _supports_temperature("gpt-5.6-terra", 0.1) is False
+        assert _supports_temperature("openai/gpt-5-nano-2025-08-07", 0.7) is False
+        assert _supports_temperature("azure/gpt-5.6-terra", 0.1) is False
+        assert _supports_temperature("gpt-5.6-terra", 1.0) is True
+
+    def test_ollama_gpt5_name_unaffected(self):
+        """An Ollama model merely named gpt-5-* is local, not real gpt-5.
+
+        The ollama early return fires before the carve-out. Pinned so a
+        reordering does not start stripping temperature from local models.
+        """
+        assert _supports_temperature("ollama_chat/gpt-5.6-terra", 0.1) is True
+        assert _supports_temperature("ollama/gpt-5-whatever", 0.7) is True
+
+    @patch("app.llm.litellm.get_model_info")
+    def test_unregistered_gpt5_name_already_skipped(self, mock_get_model_info):
+        """A self-hosted server's own gpt-5-named model is not in the registry.
+
+        It returns False from the registry-miss path above, before the
+        carve-out, so the carve-out does not change behaviour for it.
+        """
+        mock_get_model_info.side_effect = Exception("model not found")
+        assert _supports_temperature("openai/gpt-5-local-llama", 0.7) is False
+
+    @patch("app.llm.litellm.get_model_info")
     def test_model_not_in_registry(self, mock_get_model_info):
         """Unknown model not in registry — be conservative, skip temperature."""
         mock_get_model_info.side_effect = Exception("model not found")
@@ -248,6 +278,7 @@ class TestSupportsTemperature:
         assert _supports_temperature("Anthropic/Claude-Opus-4-7", 0.7) is False
         assert _supports_temperature("OPENAI/KIMI-K2.6", 0.7) is False
         assert _supports_temperature("openai/KIMI-K2.6", 1.0) is True
+        assert _supports_temperature("OpenAI/GPT-5.6-Terra", 0.1) is False
 
 
 # ---------------------------------------------------------------------------
@@ -278,6 +309,15 @@ class TestGetRetryTemperature:
         }
         assert _get_retry_temperature("anthropic/claude-opus-4-7", 0) is None
         assert _get_retry_temperature("anthropic/claude-opus-4-7", 3) is None
+
+    @patch("app.llm.litellm.get_model_info")
+    def test_gpt5_returns_none(self, mock_get_model_info):
+        """gpt-5 accepts only temperature=1, so the retry path omits it."""
+        mock_get_model_info.return_value = {
+            "supported_openai_params": ["temperature", "max_tokens"]
+        }
+        assert _get_retry_temperature("openai/gpt-5-nano-2025-08-07", 0) is None
+        assert _get_retry_temperature("gpt-5.6-terra", 2) is None
 
     @patch("app.llm.litellm.get_model_info")
     def test_kimi_k26_returns_one(self, mock_get_model_info):

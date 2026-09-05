@@ -1171,6 +1171,7 @@ def _supports_temperature(model_name: str, temperature: float | None = None) -> 
     provider-specific fallbacks for known restrictions:
       - Anthropic claude-opus-4.*: temperature is deprecated
       - Moonshot kimi-k2.6: only temperature=1 allowed
+      - gpt-5.*: only temperature=1 allowed, on OpenAI and Azure alike
 
     Queries LiteLLM's model info for every provider so that capability is
     always determined from the registry rather than a hardcoded list.
@@ -1213,14 +1214,18 @@ def _supports_temperature(model_name: str, temperature: float | None = None) -> 
     if "kimi-k2.6" in model_name.lower() and temperature != 1.0:
         return False
 
+    # gpt-5 only allows temperature=1, on OpenAI and Azure alike.
+    if "gpt-5" in model_name.lower() and temperature != 1.0:
+        return False
+
     return True
 
 
 def _get_retry_temperature(model_name: str, attempt: int, base_temp: float = 0.1) -> float | None:
     """LLM-002: Get temperature for retry attempt.
 
-    Returns None if the model does not support temperature at all.
-    Returns 1.0 for models that only support temperature=1.
+    Returns None if the model does not accept the requested temperature.
+    Returns 1.0 for kimi-k2.6, which requires an explicit temperature=1.
     Otherwise returns increasing temperatures for retry variation.
     """
     # Moonshot kimi-k2.6 only allows temperature=1.

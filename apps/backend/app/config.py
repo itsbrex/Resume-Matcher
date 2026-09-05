@@ -327,6 +327,16 @@ class Settings(BaseSettings):
     request_timeout_seconds: int = 240
     preview_ttl_seconds: int = Field(default=86400, ge=60, le=604800)
 
+    @field_validator("preview_ttl_seconds", mode="before")
+    @classmethod
+    def clamp_preview_ttl(cls, value: Any) -> int:
+        """Keep invalid preview-lifetime settings from preventing startup."""
+        try:
+            seconds = int(float(str(value).strip()))
+        except (TypeError, ValueError, OverflowError):
+            return 86400
+        return max(60, min(604800, seconds))
+
     @field_validator("request_timeout_seconds", mode="before")
     @classmethod
     def clamp_request_timeout(cls, v: Any) -> int:

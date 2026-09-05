@@ -135,30 +135,36 @@ export const useFileUpload = (
     };
   }, []);
 
-  const markUploadStarted = useCallback((fileId: string) => {
-    const operation = { controller: new AbortController() };
-    activeUploadsRef.current.set(fileId, operation);
-    const nextCount = inFlightUploadsRef.current + 1;
-    inFlightUploadsRef.current = nextCount;
+  const markUploadStarted = useCallback(
+    (fileId: string) => {
+      const operation = { controller: new AbortController() };
+      activeUploadsRef.current.set(fileId, operation);
+      const nextCount = inFlightUploadsRef.current + 1;
+      inFlightUploadsRef.current = nextCount;
 
-    if (nextCount === 1) {
-      setState((prev) => (prev.isUploadingGlobal ? prev : { ...prev, isUploadingGlobal: true }));
-    }
-    return operation;
-  }, []);
+      if (nextCount === 1) {
+        setState((prev) => (prev.isUploadingGlobal ? prev : { ...prev, isUploadingGlobal: true }));
+      }
+      return operation;
+    },
+    [setState]
+  );
 
-  const markUploadFinished = useCallback((fileId: string, operation: UploadOperation) => {
-    if (activeUploadsRef.current.get(fileId) !== operation) {
-      return;
-    }
-    activeUploadsRef.current.delete(fileId);
-    const nextCount = Math.max(0, inFlightUploadsRef.current - 1);
-    inFlightUploadsRef.current = nextCount;
+  const markUploadFinished = useCallback(
+    (fileId: string, operation: UploadOperation) => {
+      if (activeUploadsRef.current.get(fileId) !== operation) {
+        return;
+      }
+      activeUploadsRef.current.delete(fileId);
+      const nextCount = Math.max(0, inFlightUploadsRef.current - 1);
+      inFlightUploadsRef.current = nextCount;
 
-    if (nextCount === 0 && isMountedRef.current) {
-      setState((prev) => (prev.isUploadingGlobal ? { ...prev, isUploadingGlobal: false } : prev));
-    }
-  }, []);
+      if (nextCount === 0 && isMountedRef.current) {
+        setState((prev) => (prev.isUploadingGlobal ? { ...prev, isUploadingGlobal: false } : prev));
+      }
+    },
+    [setState]
+  );
 
   const isUploadCurrent = useCallback(
     (fileId: string, operation: UploadOperation) =>
@@ -166,18 +172,21 @@ export const useFileUpload = (
     []
   );
 
-  const cancelUpload = useCallback((fileId: string) => {
-    const operation = activeUploadsRef.current.get(fileId);
-    if (!operation) {
-      return;
-    }
-    activeUploadsRef.current.delete(fileId);
-    inFlightUploadsRef.current = Math.max(0, inFlightUploadsRef.current - 1);
-    operation.controller.abort();
-    if (inFlightUploadsRef.current === 0 && isMountedRef.current) {
-      setState((prev) => (prev.isUploadingGlobal ? { ...prev, isUploadingGlobal: false } : prev));
-    }
-  }, []);
+  const cancelUpload = useCallback(
+    (fileId: string) => {
+      const operation = activeUploadsRef.current.get(fileId);
+      if (!operation) {
+        return;
+      }
+      activeUploadsRef.current.delete(fileId);
+      inFlightUploadsRef.current = Math.max(0, inFlightUploadsRef.current - 1);
+      operation.controller.abort();
+      if (inFlightUploadsRef.current === 0 && isMountedRef.current) {
+        setState((prev) => (prev.isUploadingGlobal ? { ...prev, isUploadingGlobal: false } : prev));
+      }
+    },
+    [setState]
+  );
 
   const cancelAllUploads = useCallback(() => {
     const operations = Array.from(activeUploadsRef.current.values());
@@ -392,7 +401,7 @@ export const useFileUpload = (
         markUploadFinished(fileToUpload.id, operation);
       }
     },
-    [isUploadCurrent, markUploadFinished, markUploadStarted, uploadUrl]
+    [isUploadCurrent, markUploadFinished, markUploadStarted, uploadUrl, setState]
   );
 
   const addFilesAndUpload = useCallback(
@@ -524,7 +533,7 @@ export const useFileUpload = (
       generateUniqueId,
       createPreview, // Other useCallback deps
       uploadFileInternal,
-      // setState itself is stable.
+      setState,
     ]
   );
 
@@ -583,7 +592,7 @@ export const useFileUpload = (
 
   const clearErrors = useCallback(() => {
     setState((prev) => ({ ...prev, errors: [] }));
-  }, []); // setState is stable
+  }, [setState]); // setState is stable
 
   const handleDragEnter = useCallback(
     (e: DragEvent<HTMLElement>) => {
@@ -593,7 +602,7 @@ export const useFileUpload = (
       if (!multiple && state.files.length > 0) return; // Don't allow drag if single file already present
       setState((prev) => ({ ...prev, isDragging: true }));
     },
-    [state.isUploadingGlobal, state.files.length, multiple]
+    [state.isUploadingGlobal, state.files.length, multiple, setState]
   );
 
   const handleDragLeave = useCallback(
@@ -606,7 +615,7 @@ export const useFileUpload = (
       }
       setState((prev) => ({ ...prev, isDragging: false }));
     },
-    [state.isUploadingGlobal, multiple]
+    [state.isUploadingGlobal, multiple, setState]
   );
 
   const handleDragOver = useCallback(
@@ -624,7 +633,7 @@ export const useFileUpload = (
       e.dataTransfer.dropEffect = 'copy'; // Explicitly show copy cursor
       setState((prev) => ({ ...prev, isDragging: true }));
     },
-    [state.isUploadingGlobal, state.files.length, multiple]
+    [state.isUploadingGlobal, state.files.length, multiple, setState]
   );
 
   const handleDrop = useCallback(
@@ -640,7 +649,7 @@ export const useFileUpload = (
         e.dataTransfer.clearData();
       }
     },
-    [addFilesAndUpload, state.isUploadingGlobal, state.files.length, multiple] // addFilesAndUpload is from useCallback
+    [addFilesAndUpload, state.isUploadingGlobal, state.files.length, multiple, setState] // addFilesAndUpload is from useCallback
   );
 
   const handleFileChange = useCallback(
@@ -659,7 +668,7 @@ export const useFileUpload = (
     if (inputRef.current) {
       inputRef.current.click();
     }
-  }, [state.isUploadingGlobal, state.files.length, multiple]);
+  }, [state.isUploadingGlobal, state.files.length, multiple, setState]);
 
   const getInputProps = useCallback(
     (props?: InputHTMLAttributes<HTMLInputElement>) => ({

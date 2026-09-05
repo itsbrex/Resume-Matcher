@@ -117,8 +117,10 @@ bounded Markdown → LLM parse → token-guarded JSON/status commit → SQLite (
   and again while streaming members. Extracted UTF-8 text is capped at 2 MiB
   before prompt construction.
 - MarkItDown validation/conversion runs outside the event loop with at most two
-  concurrent workers. Cancellation waits for the converter's `finally` cleanup,
-  so temporary files are removed on success, error and cancellation.
+  concurrent workers and a 120-second caller deadline. On cancellation or
+  timeout, the caller returns promptly; the worker retains its capacity slot and
+  removes its temporary file in `finally`. Threads cannot be forcibly terminated,
+  so a stuck converter retains its slot until it exits.
 - Each upload/retry claims a private processing token. Only the latest token may
   commit `ready` or `failed`; superseded requests receive 409. If the row is
   deleted while parsing, completion receives 404 and does not recreate or update it.

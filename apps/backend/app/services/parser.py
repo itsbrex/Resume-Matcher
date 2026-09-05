@@ -17,6 +17,8 @@ from pdfminer.ascii85 import ascii85decode, asciihexdecode
 from pdfminer.ccitt import CCITTFaxDecoder
 from pdfminer.lzw import LZWDecoder
 from pdfminer.pdfdocument import PDFDocument
+from pdfminer.pdfdevice import PDFDevice
+from pdfminer.pdfinterp import PDFPageInterpreter, PDFResourceManager
 from pdfminer.pdfpage import PDFPage
 from pdfminer.pdfparser import PDFParser
 from pdfminer.pdftypes import (
@@ -318,7 +320,16 @@ def _validate_pdf_container(path: Path) -> None:
         with path.open("rb") as stream:
             budget = _PDFDecodeBudget()
             document = PDFDocument(_BoundedPDFParser(stream, budget))
-            if next(iter(PDFPage.create_pages(document)), None) is None:
+            manager = PDFResourceManager(caching=False)
+            interpreter = PDFPageInterpreter(manager, PDFDevice(manager))
+            has_pages = False
+            for page in PDFPage.create_pages(document):
+                has_pages = True
+                # Follow the real text consumer's references under the same
+                # bounded stream decoder. A forged /Image label on a content
+                # or font stream cannot bypass preflight expansion limits.
+                interpreter.process_page(page)
+            if not has_pages:
                 raise ValueError("PDF has no pages")
             seen: set[int] = set()
             for xref in document.xrefs:

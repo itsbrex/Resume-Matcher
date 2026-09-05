@@ -28,6 +28,7 @@ def _pdf_with_content_streams(
     *,
     filter_name: bytes | None = None,
     extra_objects: list[bytes] | None = None,
+    stream_attributes: bytes = b"",
 ) -> bytes:
     """Build one valid PDF whose page references the requested content streams."""
     filter_entry = b" /Filter /" + filter_name if filter_name else b""
@@ -50,6 +51,7 @@ def _pdf_with_content_streams(
             b"<< /Length "
             + str(len(content)).encode()
             + filter_entry
+            + stream_attributes
             + b" >>\nstream\n"
             + content
             + b"\nendstream"
@@ -493,3 +495,10 @@ async def test_unused_image_filter_does_not_reject_text_pdf() -> None:
         [b"BT /F1 12 Tf 72 720 Td (Image engineer) Tj ET"], extra_objects=[image]
     )
     assert "Image engineer" in await parse_document(document, "image.pdf")
+
+
+async def test_image_subtype_cannot_hide_page_content_expansion() -> None:
+    encoded = zlib.compress(b"A" * (17 * 1024 * 1024))
+    document = _pdf_with_content_streams([encoded], filter_name=b"FlateDecode", stream_attributes=b" /Subtype /Image")
+    with pytest.raises(DocumentResourceLimitError):
+        await parse_document(document, "forged-image.pdf")

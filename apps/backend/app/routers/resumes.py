@@ -15,6 +15,8 @@ from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import ValidationError
 
+from app.ai_limits import MAX_JOB_CHARACTERS, require_source_size
+from app.ai_budget import AIOperationRoute, remaining_timeout
 from app.config_cache import get_content_language, load_config as _load_config
 from app.database import DatabaseBusyError, ProcessingFinishOutcome, ResumeNotFoundError, db
 from app.pdf import render_resume_pdf, PDFRenderError
@@ -222,6 +224,18 @@ def _raise_improve_error(
 ) -> NoReturn:
     logger.error("Resume %s failed during %s: %s", action, stage, error)
     raise HTTPException(status_code=500, detail=detail)
+
+
+def _validate_ai_sources(
+    resume: dict[str, Any], job: dict[str, Any] | None = None
+) -> None:
+    """Check all stored inputs before starting expensive AI work."""
+    for field in ("content", "original_markdown", "processed_data"):
+        value = resume.get(field)
+        if value:
+            require_source_size(value)
+    if job is not None:
+        require_source_size(job.get("content", ""), MAX_JOB_CHARACTERS)
 
 
 def _get_original_resume_data(resume: dict[str, Any]) -> dict[str, Any] | None:
@@ -657,7 +671,7 @@ async def _generate_auxiliary_messages(
     return cover_letter, outreach_message, title, interview_prep, warnings
 
 
-router = APIRouter(prefix="/resumes", tags=["Resumes"])
+router = APIRouter(route_class=AIOperationRoute, prefix="/resumes", tags=["Resumes"])
 
 ALLOWED_TYPES = {
     "application/pdf",
@@ -776,6 +790,7 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
     # Store in database first with "processing" status (atomic master assignment)
     # original_markdown is preserved permanently for date reference even after
     # builder saves overwrite `content` with JSON.
+    require_source_size(markdown_content)
     resume = await db.create_resume_atomic_master(
         content=markdown_content,
         content_type="md",
@@ -938,6 +953,7 @@ async def improve_resume_preview_endpoint(
     if not job:
         raise HTTPException(status_code=404, detail="Job description not found")
 
+    _validate_ai_sources(resume, job)
     language = get_content_language()
     prompt_id = request.prompt_id or _get_default_prompt_id()
 
@@ -952,7 +968,7 @@ async def improve_resume_preview_endpoint(
                 language=language,
                 prompt_id=prompt_id,
             ),
-            timeout=settings.request_timeout_seconds,
+            timeout=remaining_timeout(),
         )
     except PreviewConflictError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
@@ -1264,6 +1280,7 @@ async def improve_resume_confirm_endpoint(
     if not job:
         raise HTTPException(status_code=404, detail="Job description not found")
 
+    _validate_ai_sources(resume, job)
     stage = "claim_preview"
     detail = "Failed to confirm resume. Please try again."
     claim: PreviewClaim | None = None
@@ -1330,7 +1347,7 @@ async def improve_resume_confirm_endpoint(
                     feature_config.get("enable_outreach_message", False),
                     feature_config.get("enable_interview_prep", False),
                 ),
-                timeout=settings.request_timeout_seconds,
+                timeout=remaining_timeout(),
             )
         )
         response_warnings.extend(aux_warnings)
@@ -1438,6 +1455,7 @@ async def improve_resume_endpoint(
     enable_cover_letter = feature_config.get("enable_cover_letter", False)
     enable_outreach = feature_config.get("enable_outreach_message", False)
     enable_interview_prep = feature_config.get("enable_interview_prep", False)
+    _validate_ai_sources(resume, job)
     language = get_content_language()
 
     try:
@@ -1877,6 +1895,7 @@ async def retry_processing(resume_id: str) -> ResumeUploadResponse:
             detail="Resume has no stored content to re-process.",
         )
 
+    require_source_size(markdown_content)
     allow_ready_at = resume.get("updated_at") if can_retry_legacy_empty_ready else None
     try:
         processing_token = await db.claim_resume_processing(
@@ -2023,6 +2042,7 @@ async def generate_cover_letter_endpoint(resume_id: str) -> GenerateContentRespo
         )
 
     # Get language setting
+    _validate_ai_sources(resume, job)
     language = get_content_language()
 
     # Generate cover letter
@@ -2096,6 +2116,7 @@ async def generate_outreach_endpoint(resume_id: str) -> GenerateContentResponse:
         )
 
     # Get language setting
+    _validate_ai_sources(resume, job)
     language = get_content_language()
 
     # Generate outreach message
@@ -2162,6 +2183,7 @@ async def generate_interview_prep_endpoint(
             detail="Resume has no processed data. Please re-upload the resume.",
         )
 
+    _validate_ai_sources(resume, job)
     language = get_content_language()
 
     try:

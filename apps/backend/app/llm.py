@@ -13,6 +13,8 @@ from litellm import Router
 from litellm.router import RetryPolicy
 from pydantic import BaseModel
 
+from app.ai_limits import MAX_PROMPT_CHARACTERS, validate_source_size
+from app.ai_budget import remaining_timeout
 from app.config import load_config_file, save_config_file, settings
 
 LITELLM_LOGGER_NAMES = ("LiteLLM", "LiteLLM Router", "LiteLLM Proxy")
@@ -970,6 +972,7 @@ async def complete(
 
     Transport retries (429, 500, timeout) are handled by the Router.
     """
+    validate_source_size(prompt + (system_prompt or ""), MAX_PROMPT_CHARACTERS)
     router, config = get_router(config)
     model_name = get_model_name(config)
 
@@ -983,7 +986,9 @@ async def complete(
             "model": "primary",
             "messages": messages,
             "max_tokens": max_tokens,
-            "timeout": _calculate_timeout("completion", max_tokens, config.provider),
+            "timeout": remaining_timeout(
+                _calculate_timeout("completion", max_tokens, config.provider)
+            ),
         }
         if _supports_temperature(
             model_name, temperature, reasoning_effort=config.reasoning_effort
@@ -1514,6 +1519,7 @@ async def complete_json(
         response_validator: Optional synchronous schema/source validator. A
             ``ValueError`` rejects the content inside this retry budget.
     """
+    validate_source_size(prompt + (system_prompt or ""), MAX_PROMPT_CHARACTERS)
     router, config = get_router(config)
     model_name = get_model_name(config)
 
@@ -1538,7 +1544,9 @@ async def complete_json(
                 "model": "primary",
                 "messages": messages,
                 "max_tokens": max_tokens,
-                "timeout": _calculate_timeout("json", max_tokens, config.provider),
+                "timeout": remaining_timeout(
+                    _calculate_timeout("json", max_tokens, config.provider)
+                ),
             }
             # LLM-002: Increase temperature on retry for variation
             retry_temp = _get_retry_temperature(

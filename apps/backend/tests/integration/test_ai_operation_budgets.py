@@ -1,0 +1,337 @@
+"""Operation boundaries use synthetic slow dependencies, never a provider."""
+
+import asyncio
+from typing import Any
+from unittest.mock import AsyncMock
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+from pydantic import ValidationError
+
+from app.config import settings
+from app.main import app
+from app.routers import enrichment, resumes, resume_wizard
+from app.schemas.enrichment import EnhanceRequest, RegenerateRequest, RegeneratedItem
+from app.schemas.resume_wizard import ResumeWizardState
+
+
+def item(index: int = 0) -> dict[str, Any]:
+    return {
+        "item_id": f"exp_{index}",
+        "item_type": "experience",
+        "title": "Engineer",
+        "current_content": ["Built tools"],
+    }
+
+
+@pytest.mark.parametrize(
+    "path,payload,target",
+    [
+        ("/resumes/improve/preview", {"resume_id": "r", "job_id": "j"}, "resume"),
+        (
+            "/resumes/improve/confirm",
+            {"resume_id": "r", "job_id": "j", "improved_data": {}, "improvements": []},
+            "resume",
+        ),
+        ("/enrichment/analyze/r", {}, "enrichment"),
+        (
+            "/enrichment/enhance",
+            {
+                "resume_id": "r",
+                "answers": [{"question_id": "q", "answer": "Built tools"}],
+            },
+            "enrichment",
+        ),
+        (
+            "/enrichment/regenerate",
+            {"resume_id": "r", "items": [item()], "instruction": "Clarify"},
+            "enrichment",
+        ),
+        ("/resumes/r/retry-processing", {}, "resume"),
+        ("/resumes/r/generate-cover-letter", {}, "resume"),
+        ("/resumes/r/generate-outreach", {}, "resume"),
+        (
+            "/resume-wizard/turn",
+            {"state": {}, "action": "answer", "answer": {"text": "Ada"}},
+            "wizard",
+        ),
+    ],
+)
+async def test_budget_includes_first_preload_or_stage(
+    monkeypatch: pytest.MonkeyPatch, path: str, payload: dict[str, Any], target: str
+) -> None:
+    cancelled = asyncio.Event()
+
+    async def slow(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        try:
+            await asyncio.sleep(0.15)
+            return {}
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    monkeypatch.setattr(settings, "request_timeout_seconds", 0.02)
+    if target == "wizard":
+        monkeypatch.setattr(resume_wizard, "run_ai_turn", slow)
+    else:
+        module = resumes if target == "resume" else enrichment
+        monkeypatch.setattr(module.db, "get_resume", slow)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(f"/api/v1{path}", json=payload)
+    assert response.status_code == 504
+    assert cancelled.is_set()
+    assert "timed out" in response.json()["detail"].lower()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"items": [item(i) for i in range(21)]},
+        {"items": [{**item(), "current_content": ["x" * 6001]}]},
+        {"items": [{**item(), "current_content": ["x"] * 101}]},
+    ],
+)
+def test_regenerate_input_bounds(payload: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        RegenerateRequest.model_validate(
+            {"resume_id": "r", "instruction": "Improve", **payload}
+        )
+
+
+@pytest.mark.parametrize(
+    "answers",
+    [
+        [{"question_id": "q", "answer": "x" * 6001}],
+        [{"question_id": "q", "answer": "x", "question_text": "x" * 2001}],
+        [{"question_id": "q", "answer": "x"}] * 41,
+    ],
+)
+def test_enhancement_input_bounds(answers: list[dict[str, str]]) -> None:
+    with pytest.raises(ValidationError):
+        EnhanceRequest.model_validate({"resume_id": "r", "answers": answers})
+
+
+def test_wizard_snapshot_bound() -> None:
+    with pytest.raises(ValidationError):
+        ResumeWizardState.model_validate({"resume_data": {"summary": "x" * 200001}})
+
+
+async def test_regeneration_limits_active_workers_and_keeps_item_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active = peak = 0
+    ready = asyncio.Event()
+    release = asyncio.Event()
+
+    async def regenerate(entry: Any, *args: Any) -> RegeneratedItem:
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        if active == 4:
+            ready.set()
+        try:
+            await release.wait()
+            if entry.item_id == "exp_1":
+                raise ValueError("Synthetic failure")
+            return RegeneratedItem(
+                **entry.model_dump(exclude={"current_content"}),
+                new_content=["Built tools clearly"],
+            )
+        finally:
+            active -= 1
+
+    monkeypatch.setattr(
+        enrichment.db,
+        "get_resume",
+        AsyncMock(return_value={"processed_data": {"summary": "Engineer"}}),
+    )
+    monkeypatch.setattr(enrichment, "_regenerate_experience_or_project", regenerate)
+    request = RegenerateRequest(
+        resume_id="r", items=[item(i) for i in range(10)], instruction="Clarify"
+    )
+    task = asyncio.create_task(enrichment.regenerate_items(request))
+    await asyncio.wait_for(ready.wait(), 1)
+    await asyncio.sleep(0)
+    release.set()
+    result = await task
+    assert peak == 4
+    assert active == 0
+    assert len(result.regenerated_items) == 9
+    assert [error.item_id for error in result.errors] == ["exp_1"]
+
+
+@pytest.mark.parametrize(
+    "path,payload",
+    [
+        ("/enrichment/analyze/r", {}),
+        ("/resumes/improve/preview", {"resume_id": "r", "job_id": "j"}),
+    ],
+)
+async def test_oversized_saved_source_rejected_before_ai(
+    monkeypatch: pytest.MonkeyPatch, path: str, payload: dict[str, Any]
+) -> None:
+    monkeypatch.setattr(
+        resumes.db,
+        "get_resume",
+        AsyncMock(return_value={"processed_data": {"summary": "x" * 200001}}),
+    )
+    monkeypatch.setattr(
+        resumes.db, "get_job", AsyncMock(return_value={"content": "Engineer"})
+    )
+    ai = AsyncMock(side_effect=AssertionError("AI must not run"))
+    monkeypatch.setattr(resumes, "_improve_preview_flow", ai)
+    monkeypatch.setattr(enrichment, "complete_json", ai)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(f"/api/v1{path}", json=payload)
+    assert response.status_code == 422
+    ai.assert_not_awaited()
+
+
+async def test_expired_regeneration_cancels_workers_and_queue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active = started = 0
+
+    async def blocked(*args: Any, **kwargs: Any) -> RegeneratedItem:
+        nonlocal active, started
+        active += 1
+        started += 1
+        try:
+            await asyncio.sleep(10)
+            raise AssertionError("Must cancel")
+        finally:
+            active -= 1
+
+    monkeypatch.setattr(settings, "request_timeout_seconds", 0.03)
+    monkeypatch.setattr(
+        enrichment.db,
+        "get_resume",
+        AsyncMock(return_value={"processed_data": {"summary": "Engineer"}}),
+    )
+    monkeypatch.setattr(enrichment, "_regenerate_experience_or_project", blocked)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/v1/enrichment/regenerate",
+            json={
+                "resume_id": "r",
+                "items": [item(i) for i in range(10)],
+                "instruction": "Clarify",
+            },
+        )
+    assert response.status_code == 504
+    assert started == 4
+    assert active == 0
+
+
+async def test_nested_budget_never_resets_and_context_is_restored() -> None:
+    from app.ai_budget import operation_budget, remaining_timeout
+
+    baseline = remaining_timeout(720)
+    async with operation_budget(0.2):
+        first = remaining_timeout(720)
+        await asyncio.sleep(0.01)
+        async with operation_budget(1800):
+            second = remaining_timeout(720)
+            assert 0 < second < first <= 0.2
+    assert remaining_timeout(720) == baseline == 720
+
+
+async def test_real_completion_wrapper_passes_declining_remaining_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+    from app import llm
+    from app.ai_budget import operation_budget
+
+    timeouts: list[float] = []
+
+    async def completion(**kwargs: Any) -> Any:
+        timeouts.append(kwargs["timeout"])
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="Useful result"))]
+        )
+
+    config = llm.LLMConfig(
+        provider="ollama",
+        model="llama3",
+        api_key="synthetic",
+        api_base="http://unused.invalid",
+    )
+    monkeypatch.setattr(
+        llm, "get_router", lambda _: (SimpleNamespace(acompletion=completion), config)
+    )
+    async with operation_budget(1800):
+        await llm.complete("First", max_tokens=8192)
+    assert timeouts == [480]
+    async with operation_budget(0.2):
+        await llm.complete("Second", max_tokens=8192)
+        await asyncio.sleep(0.01)
+        await llm.complete("Third", max_tokens=8192)
+    assert 0 < timeouts[2] < timeouts[1] <= 0.2
+
+
+async def test_upload_deadline_cancels_conversion_before_persistence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cancelled = asyncio.Event()
+
+    async def convert(*args: Any, **kwargs: Any) -> str:
+        try:
+            await asyncio.sleep(10)
+            return "Resume"
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    monkeypatch.setattr(settings, "request_timeout_seconds", 0.02)
+    monkeypatch.setattr(resumes, "parse_document", convert)
+    create = AsyncMock(side_effect=AssertionError("Must not persist"))
+    monkeypatch.setattr(resumes.db, "create_resume_atomic_master", create)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/v1/resumes/upload",
+            files={"file": ("test.pdf", b"%PDF-1.4 synthetic", "application/pdf")},
+        )
+    assert response.status_code == 504
+    assert cancelled.is_set()
+    create.assert_not_awaited()
+
+
+async def test_caller_cancellation_propagates_without_waiting_for_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entered = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def preload(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        entered.set()
+        try:
+            await asyncio.sleep(10)
+            return {}
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    monkeypatch.setattr(resumes.db, "get_resume", preload)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        task = asyncio.create_task(
+            client.post(
+                "/api/v1/resumes/improve/preview",
+                json={"resume_id": "r", "job_id": "j"},
+            )
+        )
+        await asyncio.wait_for(entered.wait(), 1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert cancelled.is_set()

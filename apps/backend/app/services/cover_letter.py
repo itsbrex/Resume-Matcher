@@ -4,6 +4,7 @@ import json
 import logging
 from typing import Any
 
+from app.ai_limits import MAX_JOB_CHARACTERS, validate_source_size
 from app.config import load_config_file
 from app.llm import complete
 from app.prompts.templates import (
@@ -12,17 +13,6 @@ from app.prompts.templates import (
     OUTREACH_MESSAGE_PROMPT,
 )
 from app.prompts import get_language_name
-
-
-MAX_GENERATION_JOB_CHARACTERS = 100_000
-
-
-def _validate_job_description_size(job_description: str) -> None:
-    """Reject optional-generation inputs outside the shared JD budget."""
-    if len(job_description) > MAX_GENERATION_JOB_CHARACTERS:
-        raise ValueError(
-            "Job description exceeds the 100000-character generation limit."
-        )
 
 
 def _resolve_feature_prompt(
@@ -59,7 +49,7 @@ async def generate_cover_letter(
     Returns:
         Generated cover letter as plain text
     """
-    _validate_job_description_size(job_description)
+    validate_source_size(job_description, MAX_JOB_CHARACTERS)
     output_language = get_language_name(language)
 
     template, is_custom = _resolve_feature_prompt(
@@ -114,7 +104,7 @@ async def generate_outreach_message(
     Returns:
         Generated outreach message as plain text
     """
-    _validate_job_description_size(job_description)
+    validate_source_size(job_description, MAX_JOB_CHARACTERS)
     output_language = get_language_name(language)
 
     template, is_custom = _resolve_feature_prompt(
@@ -162,7 +152,7 @@ async def generate_resume_title(
     Returns:
         Generated title like "Senior Frontend Engineer @ Stripe"
     """
-    _validate_job_description_size(job_description)
+    validate_source_size(job_description, MAX_JOB_CHARACTERS)
     output_language = get_language_name(language)
 
     prompt = GENERATE_TITLE_PROMPT.format(

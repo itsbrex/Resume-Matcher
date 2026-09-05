@@ -10,6 +10,8 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 
+from app.ai_limits import MAX_ITEM_WORKERS, require_source_size
+from app.ai_budget import AIOperationRoute, remaining_timeout
 from app.config_cache import get_content_language
 from app.database import db
 from app.llm import complete_json
@@ -39,7 +41,9 @@ from app.schemas.enrichment import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/enrichment", tags=["Enrichment"])
+router = APIRouter(
+    route_class=AIOperationRoute, prefix="/enrichment", tags=["Enrichment"]
+)
 
 
 def _validate_text_replacements(
@@ -153,6 +157,8 @@ async def analyze_resume(resume_id: str) -> AnalysisResponse:
             detail="Resume has no processed data. Please re-upload the resume.",
         )
 
+    require_source_size(processed_data)
+
     # Build prompt with content language
     resume_json = json.dumps(processed_data)
     language = get_content_language()
@@ -171,7 +177,7 @@ async def analyze_resume(resume_id: str) -> AnalysisResponse:
                 schema_type="enrichment",
                 response_validator=_validate_analysis_result,
             ),
-            timeout=180.0,  # 3-minute hard limit
+            timeout=remaining_timeout(),
         )
         result = _validate_analysis_result(result)
 
@@ -243,6 +249,8 @@ async def generate_enhancements(request: EnhanceRequest) -> EnhancementPreview:
             detail="Resume has no processed data.",
         )
 
+    require_source_size(processed_data)
+
     # Group answers by item_id.
     # When all answers carry item_id (from the analysis step), we can skip
     # the expensive re-analysis LLM call and derive item details from the
@@ -282,7 +290,7 @@ async def generate_enhancements(request: EnhanceRequest) -> EnhancementPreview:
                     schema_type="enrichment",
                     response_validator=_validate_analysis_result,
                 ),
-                timeout=180.0,
+                timeout=remaining_timeout(),
             )
             analysis_result = _validate_analysis_result(analysis_result)
         except asyncio.TimeoutError:
@@ -346,7 +354,7 @@ async def generate_enhancements(request: EnhanceRequest) -> EnhancementPreview:
         # Build enhancement prompt with content language
         current_desc = item.get("current_description", [])
         current_desc_text = "\n".join(f"- {d}" for d in current_desc) if current_desc else "(No description)"
-        
+
         language = get_content_language()
         output_language = get_language_name(language)
 
@@ -582,20 +590,29 @@ async def regenerate_items(request: RegenerateRequest) -> RegenerateResponse:
     # Get language name for LLM
     output_language = get_language_name(request.output_language)
 
-    # Process all items in parallel for better performance
-    tasks = []
-    for item in request.items:
-        if item.item_type == "skills":
-            tasks.append(_regenerate_skills(item, request.instruction, output_language))
-        else:
-            tasks.append(_regenerate_experience_or_project(item, request.instruction, output_language))
+    # A bounded collection may queue work, but at most four items call AI.
+    semaphore = asyncio.Semaphore(MAX_ITEM_WORKERS)
 
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    async def regenerate_one(item: RegenerateItemInput) -> RegeneratedItem:
+        async with semaphore:
+            if item.item_type == "skills":
+                return await _regenerate_skills(
+                    item, request.instruction, output_language
+                )
+            return await _regenerate_experience_or_project(
+                item, request.instruction, output_language
+            )
+
+    results = await asyncio.gather(
+        *(regenerate_one(item) for item in request.items), return_exceptions=True
+    )
 
     regenerated_items: list[RegeneratedItem] = []
     errors: list[RegenerateItemError] = []
 
     for item, result in zip(request.items, results):
+        if isinstance(result, asyncio.CancelledError):
+            raise result
         if isinstance(result, Exception):
             logger.error(
                 "Failed to regenerate item. "

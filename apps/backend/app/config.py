@@ -316,8 +316,8 @@ class Settings(BaseSettings):
     log_level: Literal["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"] = "INFO"
     frontend_base_url: str = "http://localhost:3000"
 
-    # Hard timeout (seconds) for a single resume tailoring/improve request — the
-    # backend wraps the improve flow in asyncio.wait_for(timeout=this). It MUST be
+    # Total timeout for AI operations, including validation, database preloads,
+    # model attempts and persistence. Nested stages share one deadline. It MUST be
     # kept in sync with the two frontend layers (Next.js `proxyTimeout` and the
     # client AbortController, both driven by NEXT_PUBLIC_REQUEST_TIMEOUT_MS):
     # whichever layer is shortest aborts first, so raising only one silently fails

@@ -7,6 +7,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.ai_limits import validate_source_size
+
+
 _TEXT_VALUE_KEYS = (
     "text",
     "summary",
@@ -689,6 +692,11 @@ class ImproveResumeConfirmRequest(BaseModel):
     preview_id: str | None = None
     improved_data: ResumeData
     improvements: list[ImprovementSuggestion]
+
+    @model_validator(mode="after")
+    def _validate_source_budget(self) -> "ImproveResumeConfirmRequest":
+        validate_source_size(self.model_dump(mode="json"))
+        return self
 
 
 # Config Models

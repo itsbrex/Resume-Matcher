@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 
+from app.ai_budget import AIOperationRoute
 from app.database import db
 from app.schemas.models import ResumeData, normalize_resume_data
 from app.schemas.resume_wizard import (
@@ -25,7 +26,9 @@ from app.services.resume_wizard import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/resume-wizard", tags=["Resume Wizard"])
+router = APIRouter(
+    route_class=AIOperationRoute, prefix="/resume-wizard", tags=["Resume Wizard"]
+)
 
 
 def _is_identical_wizard_master(

@@ -321,6 +321,18 @@ async def test_existing_tracker_card_does_not_wait_for_writer(isolated_db: Datab
     assert duplicate == card
 
 
+async def test_job_upload_contention_is_retryable_without_partial_batch(isolated_db: Database) -> None:
+    seed = await isolated_db.create_job("existing job")
+    async with isolated_db._write_session():
+        async with AsyncClient(transport=ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test") as client:
+            response = await client.post("/api/v1/jobs/upload", json={"job_descriptions": ["Python engineer", "Data engineer"]})
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "1"
+    async with isolated_db._session() as session:
+        saved_ids = list((await session.execute(select(Job.job_id))).scalars())
+    assert saved_ids == [seed["job_id"]]
+
+
 async def test_busy_manual_card_creation_cleans_up_its_job(isolated_db: Database, monkeypatch: pytest.MonkeyPatch) -> None:
     from app.database import DatabaseBusyError
     from unittest.mock import AsyncMock

@@ -769,18 +769,28 @@ async def parse_document(content: bytes, filename: str) -> str:
     Returns:
         Markdown text content
     """
-    worker = asyncio.create_task(
-        anyio.to_thread.run_sync(
-            _parse_document_sync,
-            content,
-            filename,
-            abandon_on_cancel=False,
-            limiter=_DOCUMENT_CONVERSION_LIMITER,
-        )
+    deadline = asyncio.get_running_loop().time() + DOCUMENT_CONVERSION_TIMEOUT_SECONDS
+    borrower = object()
+    # Queued requests still belong to their caller. Only an admitted conversion
+    # can outlive cancellation; abandoned queues never retain file bytes or run.
+    await asyncio.wait_for(
+        _DOCUMENT_CONVERSION_LIMITER.acquire_on_behalf_of(borrower),
+        timeout=DOCUMENT_CONVERSION_TIMEOUT_SECONDS,
     )
+
+    async def run_admitted_worker() -> str:
+        try:
+            return await anyio.to_thread.run_sync(
+                _parse_document_sync, content, filename, abandon_on_cancel=False
+            )
+        finally:
+            _DOCUMENT_CONVERSION_LIMITER.release_on_behalf_of(borrower)
+
+    worker = asyncio.create_task(run_admitted_worker())
     try:
         return await asyncio.wait_for(
-            asyncio.shield(worker), timeout=DOCUMENT_CONVERSION_TIMEOUT_SECONDS
+            asyncio.shield(worker),
+            timeout=max(0.0, deadline - asyncio.get_running_loop().time()),
         )
     except (asyncio.CancelledError, TimeoutError):
         # Threads cannot be killed safely. Return on the caller's deadline while

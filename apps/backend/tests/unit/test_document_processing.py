@@ -502,3 +502,33 @@ async def test_image_subtype_cannot_hide_page_content_expansion() -> None:
     document = _pdf_with_content_streams([encoded], filter_name=b"FlateDecode", stream_attributes=b" /Subtype /Image")
     with pytest.raises(DocumentResourceLimitError):
         await parse_document(document, "forged-image.pdf")
+
+
+async def test_cancelled_queued_conversion_never_starts_later(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import parser
+    entered = threading.Event()
+    release = threading.Event()
+    lock = threading.Lock()
+    calls = 0
+
+    def convert(content: bytes, filename: str) -> str:
+        nonlocal calls
+        with lock:
+            calls += 1
+            if calls == 2:
+                entered.set()
+        release.wait(2)
+        return "synthetic"
+
+    monkeypatch.setattr(parser, "_parse_document_sync", convert)
+    owners = [asyncio.create_task(parser.parse_document(b"x", "one.pdf")) for _ in range(2)]
+    assert await asyncio.to_thread(entered.wait, 1)
+    queued = asyncio.create_task(parser.parse_document(b"x", "queued.pdf"))
+    await asyncio.sleep(0.01)
+    queued.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await queued
+    release.set()
+    await asyncio.gather(*owners)
+    await asyncio.sleep(0.05)
+    assert calls == 2

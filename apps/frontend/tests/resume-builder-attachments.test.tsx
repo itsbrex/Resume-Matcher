@@ -293,6 +293,54 @@ describe('builder attachment persistence', () => {
     expect(unload.defaultPrevented).toBe(true);
   });
 
+  it('saves the latest cover revision before exporting when editing continues during save', async () => {
+    const firstSave = deferred<void>();
+    const latestSave = deferred<void>();
+    fetchResume.mockResolvedValue(response({ cover_letter: 'SERVER COVER' }));
+    updateCoverLetter
+      .mockReturnValueOnce(firstSave.promise)
+      .mockReturnValueOnce(latestSave.promise);
+    const Builder = await importBuilder();
+    render(<Builder />);
+    const editor = await screen.findByDisplayValue('SERVER COVER');
+    fireEvent.change(editor, { target: { value: 'FIRST EDIT' } });
+
+    await act(async () => screen.getByRole('button', { name: 'common.download' }).click());
+    fireEvent.change(editor, { target: { value: 'NEWER EDIT' } });
+    await act(async () => firstSave.resolve());
+
+    expect(updateCoverLetter).toHaveBeenNthCalledWith(1, 'a', 'FIRST EDIT');
+    expect(updateCoverLetter).toHaveBeenNthCalledWith(2, 'a', 'NEWER EDIT');
+    expect(downloadCoverLetterPdf).not.toHaveBeenCalled();
+
+    await act(async () => latestSave.resolve());
+    expect(downloadCoverLetterPdf).toHaveBeenCalledWith('a', 'A4', 'en');
+  });
+
+  it('serializes an existing cover save ahead of the export flush', async () => {
+    const firstSave = deferred<void>();
+    const latestSave = deferred<void>();
+    fetchResume.mockResolvedValue(response({ cover_letter: 'SERVER COVER' }));
+    updateCoverLetter
+      .mockReturnValueOnce(firstSave.promise)
+      .mockReturnValueOnce(latestSave.promise);
+    const Builder = await importBuilder();
+    render(<Builder />);
+    const editor = await screen.findByDisplayValue('SERVER COVER');
+    fireEvent.change(editor, { target: { value: 'FIRST EDIT' } });
+    await act(async () => screen.getByRole('button', { name: 'common.save' }).click());
+    fireEvent.change(editor, { target: { value: 'NEWER EDIT' } });
+    await act(async () => screen.getByRole('button', { name: 'common.download' }).click());
+
+    expect(updateCoverLetter).toHaveBeenCalledTimes(1);
+    await act(async () => firstSave.resolve());
+    expect(updateCoverLetter).toHaveBeenNthCalledWith(2, 'a', 'NEWER EDIT');
+    expect(downloadCoverLetterPdf).not.toHaveBeenCalled();
+
+    await act(async () => latestSave.resolve());
+    expect(downloadCoverLetterPdf).toHaveBeenCalledWith('a', 'A4', 'en');
+  });
+
   it('flushes outreach before Back and offers local-draft leave when it fails', async () => {
     currentSearch = 'id=a&tab=outreach';
     fetchResume.mockResolvedValue(response({ outreach_message: 'SERVER OUTREACH' }));

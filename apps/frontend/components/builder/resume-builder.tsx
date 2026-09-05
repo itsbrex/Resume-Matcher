@@ -280,6 +280,8 @@ const ResumeBuilderContent = () => {
   const attachmentBaselinesRef = useRef({ coverLetter: '', outreachMessage: '' });
   const coverLetterEditVersionRef = useRef(0);
   const outreachEditVersionRef = useRef(0);
+  const coverLetterSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const coverLetterSaveCountRef = useRef(0);
   const [isCopied, setIsCopied] = useState(false);
   const [resumeTitle, setResumeTitle] = useState<string | null>(null);
 
@@ -969,6 +971,24 @@ const ResumeBuilderContent = () => {
   };
 
   // Cover letter handlers
+  const queueCoverLetterSave = (activeResumeId: string, content: string): Promise<void> => {
+    const save = coverLetterSaveQueueRef.current
+      .catch(() => {
+        // Keep the document-owned queue available after a failed request.
+      })
+      .then(() => {
+        if (!documentIsActiveRef.current) {
+          throw new DOMException('Editor closed', 'AbortError');
+        }
+        return updateCoverLetter(activeResumeId, content);
+      });
+    coverLetterSaveQueueRef.current = save.then(
+      () => undefined,
+      () => undefined
+    );
+    return save;
+  };
+
   const handleSaveCoverLetter = async (
     showSuccess = true,
     showFailure = true
@@ -978,8 +998,9 @@ const ResumeBuilderContent = () => {
     const savedContent = attachmentValuesRef.current.coverLetter;
     const savedVersion = coverLetterEditVersionRef.current;
     try {
+      coverLetterSaveCountRef.current += 1;
       setIsCoverLetterSaving(true);
-      await updateCoverLetter(activeResumeId, savedContent);
+      await queueCoverLetterSave(activeResumeId, savedContent);
       if (!documentIsActiveRef.current) return false;
       const baselines = { ...attachmentBaselinesRef.current, coverLetter: savedContent };
       attachmentBaselinesRef.current = baselines;
@@ -1001,8 +1022,23 @@ const ResumeBuilderContent = () => {
       }
       return false;
     } finally {
-      if (documentIsActiveRef.current) setIsCoverLetterSaving(false);
+      coverLetterSaveCountRef.current = Math.max(0, coverLetterSaveCountRef.current - 1);
+      if (documentIsActiveRef.current) {
+        setIsCoverLetterSaving(coverLetterSaveCountRef.current > 0);
+      }
     }
+  };
+
+  const flushCoverLetterForExport = async (): Promise<boolean> => {
+    while (documentIsActiveRef.current) {
+      if (attachmentValuesRef.current.coverLetter === attachmentBaselinesRef.current.coverLetter) {
+        return true;
+      }
+      if (!(await handleSaveCoverLetter(false))) {
+        return false;
+      }
+    }
+    return false;
   };
 
   const flushAttachmentChanges = async (): Promise<boolean> => {
@@ -1027,11 +1063,11 @@ const ResumeBuilderContent = () => {
       showNotification(t('builder.alerts.coverLetterMissing'), 'warning');
       return;
     }
-    if (!(await handleSaveCoverLetter(false))) {
-      return;
-    }
     try {
       setIsDownloading(true);
+      if (!(await flushCoverLetterForExport())) {
+        return;
+      }
       const blob = await downloadCoverLetterPdf(resumeId, templateSettings.pageSize, uiLanguage);
       const company = getCompanyFromTitle(resumeTitle);
       const userName = resumeData.personalInfo?.name?.trim() || null;

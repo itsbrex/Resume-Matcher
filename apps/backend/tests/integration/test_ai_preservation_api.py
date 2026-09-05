@@ -167,6 +167,77 @@ async def test_partial_final_writer_preview_confirms_and_reads_back_without_loss
         assert stored["processed_data"][section] == source[section]
 
 
+async def test_schema_round_trip_preview_preserves_rows_styles_and_list_multiplicity(
+    isolated_db: Any, sample_resume: dict[str, Any]
+) -> None:
+    source = ResumeData.model_validate(copy.deepcopy(sample_resume)).model_dump()
+    source["workExperience"][0]["descriptionStyles"][0] = "plain"
+    source["additional"]["technicalSkills"] = ["Python", "Python"]
+    source["customSections"] = {
+        "talks": {
+            "sectionType": "itemList",
+            "items": [
+                {
+                    "id": 9,
+                    "title": "PyCon",
+                    "description": ["Spoke on testing"],
+                    "descriptionStyles": ["plain"],
+                }
+            ],
+        },
+        "topics": {
+            "sectionType": "stringList",
+            "strings": ["Reliability", "Reliability"],
+        },
+    }
+    source = ResumeData.model_validate(source).model_dump()
+    destructive_writer_result = copy.deepcopy(source)
+    destructive_writer_result["workExperience"][0]["description"] = ["   "]
+    destructive_writer_result["customSections"]["talks"]["items"][0][
+        "description"
+    ] = ["\t"]
+    destructive_writer_result["additional"] = {}
+    destructive_writer_result["customSections"]["topics"]["strings"] = []
+    resume_id, job_id = await _seed(isolated_db, source)
+
+    with ExitStack() as stack:
+        for pipeline_patch in _pipeline_patches(
+            source, _refinement_result(destructive_writer_result)
+        ):
+            stack.enter_context(pipeline_patch)
+        async with _client() as client:
+            preview = await client.post(
+                "/api/v1/resumes/improve/preview",
+                json={"resume_id": resume_id, "job_id": job_id},
+            )
+            assert preview.status_code == 200, preview.text
+            preview_data = preview.json()["data"]
+            preview_resume = preview_data["resume_preview"]
+            confirm = await client.post(
+                "/api/v1/resumes/improve/confirm",
+                json={
+                    "resume_id": resume_id,
+                    "job_id": job_id,
+                    "improved_data": preview_resume,
+                    "improvements": preview_data["improvements"],
+                },
+            )
+
+    assert confirm.status_code == 200, confirm.text
+    assert preview_resume["workExperience"][0]["description"] == source[
+        "workExperience"
+    ][0]["description"]
+    assert preview_resume["workExperience"][0]["descriptionStyles"] == source[
+        "workExperience"
+    ][0]["descriptionStyles"]
+    assert preview_resume["additional"]["technicalSkills"] == ["Python", "Python"]
+    assert preview_resume["customSections"] == source["customSections"]
+    tailored_id = confirm.json()["data"]["resume_id"]
+    stored = await isolated_db.get_resume(tailored_id)
+    assert stored is not None
+    assert stored["processed_data"] == preview_resume
+
+
 async def test_nested_preview_and_confirm_failures_return_only_safe_warning_codes(
     isolated_db: Any, sample_resume: dict[str, Any]
 ) -> None:

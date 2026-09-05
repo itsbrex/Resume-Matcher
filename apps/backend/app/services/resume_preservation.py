@@ -174,8 +174,10 @@ def _merge_description_rows(
             break
         source_index, score = match
         candidate_row = raw_candidate
-        requires_restore = _novel_numbers(source_text, candidate_row) or (
-            not allow_review_claims and score < _GROUNDING_REVIEW_THRESHOLD
+        requires_restore = (
+            not candidate_row.strip()
+            or _novel_numbers(source_text, candidate_row)
+            or (not allow_review_claims and score < _GROUNDING_REVIEW_THRESHOLD)
         )
         if requires_restore and candidate_index in available:
             source_index = candidate_index
@@ -323,16 +325,24 @@ def _merge_additional(source: Any, candidate: Any) -> dict[str, list[str]]:
             item for item in candidate_dict.get(field, []) if isinstance(item, str)
         ]
         if field != "technicalSkills":
-            source_keys = {_normalized(item) for item in source_items}
-            candidate_items = [
-                item for item in candidate_items if _normalized(item) in source_keys
-            ]
-        seen = {_normalized(item) for item in candidate_items}
+            remaining_source_items = Counter(_normalized(item) for item in source_items)
+            preserved_candidate_items: list[str] = []
+            for item in candidate_items:
+                key = _normalized(item)
+                if remaining_source_items[key] > 0:
+                    preserved_candidate_items.append(item)
+                    remaining_source_items[key] -= 1
+            candidate_items = preserved_candidate_items
+        remaining_candidate_items = Counter(
+            _normalized(item) for item in candidate_items
+        )
         result[field] = list(candidate_items)
         for item in source_items:
-            if _normalized(item) not in seen:
+            key = _normalized(item)
+            if remaining_candidate_items[key] > 0:
+                remaining_candidate_items[key] -= 1
+            else:
                 result[field].append(item)
-                seen.add(_normalized(item))
     return result
 
 

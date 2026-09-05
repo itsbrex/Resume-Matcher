@@ -481,7 +481,8 @@
       "localDraft": "초안이 로컬에 저장되었습니다",
       "saveNow": "지금 저장",
       "retrySave": "저장 다시 시도",
-      "savedButton": "저장됨"
+      "savedButton": "저장됨",
+      "localDraftUnavailable": "로컬 초안을 저장할 수 없음"
     },
     "draftRecovery": {
       "title": "로컬 초안을 복원할까요?",
@@ -495,6 +496,12 @@
       "description": "최신 편집 내용을 아직 서버에 동기화하지 못했습니다. 로컬 초안은 이 브라우저에 저장되어 있지만 다른 브라우저나 기기에서는 사용하지 못할 수 있습니다.",
       "leave": "대시보드로 이동",
       "stay": "편집 계속하기"
+    },
+    "leaveWithoutDraft": {
+      "title": "저장하지 않은 변경 사항을 두고 나가시겠습니까?",
+      "description": "최신 변경 사항을 서버와 동기화하거나 이 브라우저에 저장하지 못했습니다. 지금 나가면 변경 사항이 사라질 수 있습니다.",
+      "leave": "그래도 나가기",
+      "stay": "계속 편집"
     }
   },
   "enrichment": {
@@ -950,7 +957,8 @@
       "review": "검토 및 완료",
       "create": "마스터 이력서 생성",
       "keepAdding": "계속 추가",
-      "backToDashboard": "대시보드로 돌아가기"
+      "backToDashboard": "대시보드로 돌아가기",
+      "openCreated": "생성된 이력서 열기"
     },
     "preview": {
       "label": "실시간 초안",
@@ -963,7 +971,8 @@
     },
     "errors": {
       "turnFailed": "마법사가 답변을 저장하지 못했습니다. 다시 시도하세요.",
-      "finalizeFailed": "마법사가 마스터 이력서를 생성하지 못했습니다. 다시 시도하세요."
+      "finalizeFailed": "마법사가 마스터 이력서를 생성하지 못했습니다. 다시 시도하세요.",
+      "createdNavigationFailed": "마스터 이력서를 만들었지만 이 페이지에서 자동으로 열지 못했습니다. 아래 버튼을 사용해 계속하세요."
     },
     "entry": {
       "kicker": "마스터 이력서 설정",
@@ -981,6 +990,10 @@
         "description": "핵심 질문에 답하면 마법사가 탄탄한 첫 마스터 이력서 초안을 구성해 줍니다.",
         "action": "마법사 시작"
       }
+    },
+    "created": {
+      "title": "마스터 이력서 생성 완료",
+      "description": "마스터 이력서를 만들었습니다. 이력서를 열어 계속 편집하세요."
     }
   },
   "tracker": {

@@ -91,6 +91,34 @@ async def test_turn_answer_without_answer_is_422(isolated_db) -> None:
     assert response.status_code == 422
 
 
+async def test_turn_malformed_model_envelope_is_recoverable_422(isolated_db) -> None:
+    transport = ASGITransport(app=app)
+    state = build_initial_wizard_state()
+    state.step = "question"
+    state.current_question = ResumeWizardQuestion(text="Experience?", section="workExperience")
+
+    with patch(
+        "app.services.resume_wizard.complete_json",
+        new_callable=AsyncMock,
+        return_value={"is_complete": "false"},
+    ) as mock_complete:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/api/v1/resume-wizard/turn",
+                json={
+                    "state": state.model_dump(mode="json"),
+                    "action": "answer",
+                    "answer": {"text": "Engineer at Acme"},
+                },
+            )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Could not update the resume draft."}
+    assert mock_complete.await_count == 1
+    assert state.asked_count == 0
+    assert state.history == []
+
+
 async def test_finalize_creates_ready_master_resume(isolated_db) -> None:
     transport = ASGITransport(app=app)
     state = build_initial_wizard_state()

@@ -117,7 +117,8 @@
       "localDraft": "Borrador guardado localmente",
       "saveNow": "Guardar ahora",
       "retrySave": "Reintentar guardado",
-      "savedButton": "Guardado"
+      "savedButton": "Guardado",
+      "localDraftUnavailable": "Borrador local no disponible"
     },
     "draftRecovery": {
       "title": "¿Restaurar borrador local?",
@@ -495,6 +496,12 @@
       "coverLetterGenerateFailed": "No se pudo generar la carta de presentación: {error}",
       "outreachGenerateFailed": "No se pudo generar el mensaje de contacto: {error}",
       "interviewPrepGenerateFailed": "No se pudo generar la preparación de entrevista: {error}"
+    },
+    "leaveWithoutDraft": {
+      "title": "¿Salir con cambios sin guardar?",
+      "description": "Los últimos cambios no pudieron sincronizarse con el servidor ni guardarse en este navegador. Si sales ahora, podrías perderlos.",
+      "leave": "Salir de todos modos",
+      "stay": "Seguir editando"
     }
   },
   "enrichment": {
@@ -950,7 +957,8 @@
       "review": "Revisar y finalizar",
       "create": "Crear currículum maestro",
       "keepAdding": "Seguir añadiendo",
-      "backToDashboard": "Volver al panel"
+      "backToDashboard": "Volver al panel",
+      "openCreated": "Abrir currículum creado"
     },
     "preview": {
       "label": "Borrador en vivo",
@@ -963,7 +971,8 @@
     },
     "errors": {
       "turnFailed": "El asistente no pudo guardar esa respuesta. Inténtalo de nuevo.",
-      "finalizeFailed": "El asistente no pudo crear tu currículum maestro. Inténtalo de nuevo."
+      "finalizeFailed": "El asistente no pudo crear tu currículum maestro. Inténtalo de nuevo.",
+      "createdNavigationFailed": "Tu currículum maestro se creó, pero esta página no pudo abrirlo automáticamente. Usa el botón de abajo para continuar."
     },
     "entry": {
       "kicker": "Configuración del currículum maestro",
@@ -981,6 +990,10 @@
         "description": "Responde preguntas enfocadas y deja que el asistente arme un primer borrador sólido de tu currículum maestro.",
         "action": "Iniciar asistente"
       }
+    },
+    "created": {
+      "title": "Currículum maestro creado",
+      "description": "Tu currículum maestro se creó. Ábrelo para seguir editando."
     }
   },
   "tracker": {

@@ -67,6 +67,7 @@ Dashboard → Upload Master Resume → Tailor for Job → View/Edit → Download
 | `master_resume_id` | Master resume UUID |
 | `resume_builder_draft:<resumeId>` / `resume_builder_draft:new` | Resume-scoped recovery draft; a failed write is shown as unavailable and never described as saved |
 | `resume_builder_settings` | Template prefs |
+| `resume_wizard_draft` | Versioned wizard state; nested resume/history values are normalized before restoration |
 
 ### StatusCache Context
 

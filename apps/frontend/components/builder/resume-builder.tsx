@@ -147,11 +147,15 @@ const readStoredResumeDraft = (resumeId: string | null): StoredResumeDraft | nul
   return legacyDraft;
 };
 
-const writeStoredResumeDraft = (resumeId: string | null, data: ResumeData): void => {
-  safeStorage.set(
-    getResumeDraftStorageKey(resumeId),
-    JSON.stringify(buildResumeDraft(resumeId, data))
-  );
+const writeStoredResumeDraft = (resumeId: string | null, data: ResumeData): boolean => {
+  try {
+    return safeStorage.set(
+      getResumeDraftStorageKey(resumeId),
+      JSON.stringify(buildResumeDraft(resumeId, data))
+    );
+  } catch {
+    return false;
+  }
 };
 
 const clearStoredResumeDraft = (resumeId: string | null): void => {
@@ -202,6 +206,7 @@ const ResumeBuilderContent = () => {
   const [pendingAttachmentDraftRestore, setPendingAttachmentDraftRestore] =
     useState<AttachmentDraftEnvelope | null>(null);
   const [showLeaveWithLocalDraftDialog, setShowLeaveWithLocalDraftDialog] = useState(false);
+  const [hasCurrentLocalDraft, setHasCurrentLocalDraft] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [loadingState, setLoadingState] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
   const [templateSettings, setTemplateSettings] = useState<TemplateSettings>(() => {
@@ -276,6 +281,10 @@ const ResumeBuilderContent = () => {
   const [isOutreachSaving, setIsOutreachSaving] = useState(false);
   const [hasUnsavedCoverLetter, setHasUnsavedCoverLetter] = useState(false);
   const [hasUnsavedOutreach, setHasUnsavedOutreach] = useState(false);
+  const [hasCurrentAttachmentDraft, setHasCurrentAttachmentDraft] = useState(false);
+  const hasCurrentRecoveryDraft =
+    (!hasUnsavedChanges || hasCurrentLocalDraft) &&
+    (!(hasUnsavedCoverLetter || hasUnsavedOutreach) || hasCurrentAttachmentDraft);
   const attachmentValuesRef = useRef({ coverLetter: '', outreachMessage: '' });
   const attachmentBaselinesRef = useRef({ coverLetter: '', outreachMessage: '' });
   const coverLetterEditVersionRef = useRef(0);
@@ -476,6 +485,7 @@ const ResumeBuilderContent = () => {
             setResumeData(serverData);
             setLastSavedData(serverData);
             setHasUnsavedChanges(false);
+            setHasCurrentLocalDraft(false);
             syncedVersionRef.current = editVersionRef.current;
             unsyncedSinceRef.current = null;
             setAutoSaveError(null);
@@ -529,6 +539,7 @@ const ResumeBuilderContent = () => {
               setResumeData(serverData);
               setLastSavedData(serverData);
               setHasUnsavedChanges(false);
+              setHasCurrentLocalDraft(false);
               syncedVersionRef.current = editVersionRef.current;
               unsyncedSinceRef.current = null;
               setAutoSaveError(null);
@@ -580,7 +591,7 @@ const ResumeBuilderContent = () => {
         setInterviewPrep(improvedInterviewPrep);
         setInterviewPrepError(null);
         // Persist to localStorage as backup
-        writeStoredResumeDraft(resumeId, improvedPreview);
+        setHasCurrentLocalDraft(writeStoredResumeDraft(resumeId, improvedPreview));
         setLoadingState('loaded');
         return;
       }
@@ -655,7 +666,7 @@ const ResumeBuilderContent = () => {
       setHasUnsavedChanges(true);
       setAutoSaveError(null);
       // Auto-save draft to localStorage
-      writeStoredResumeDraft(resumeId, newData);
+      setHasCurrentLocalDraft(writeStoredResumeDraft(resumeId, newData));
     },
     [resumeId]
   );
@@ -739,6 +750,7 @@ const ResumeBuilderContent = () => {
           syncedVersionRef.current = versionAtSchedule;
           unsyncedSinceRef.current = null;
           clearStoredResumeDraft(resumeId);
+          setHasCurrentLocalDraft(false);
         }
       } catch (error) {
         if (!documentIsActiveRef.current) return;
@@ -795,6 +807,7 @@ const ResumeBuilderContent = () => {
           unsyncedSinceRef.current = null;
           setLastAutoSavedAt(Date.now());
           clearStoredResumeDraft(resumeId);
+          setHasCurrentLocalDraft(false);
           return true;
         }
 
@@ -846,12 +859,13 @@ const ResumeBuilderContent = () => {
       // clean is what left the discarded text on the server silently.
       setHasUnsavedChanges(true);
       unsyncedSinceRef.current = Date.now();
-      writeStoredResumeDraft(resumeId, lastSavedData);
+      setHasCurrentLocalDraft(writeStoredResumeDraft(resumeId, lastSavedData));
     } else {
       setHasUnsavedChanges(false);
       syncedVersionRef.current = editVersionRef.current;
       unsyncedSinceRef.current = null;
       clearStoredResumeDraft(resumeId);
+      setHasCurrentLocalDraft(false);
     }
 
     setAutoSaveError(null);
@@ -864,8 +878,12 @@ const ResumeBuilderContent = () => {
     setResumeData(pendingDraftRestore.data);
     setHasUnsavedChanges(true);
     setAutoSaveError(null);
-    writeStoredResumeDraft(resumeId, pendingDraftRestore.data);
-    if (pendingDraftRestore.storageKey !== getResumeDraftStorageKey(resumeId)) {
+    const didWriteScopedDraft = writeStoredResumeDraft(resumeId, pendingDraftRestore.data);
+    setHasCurrentLocalDraft(true);
+    if (
+      didWriteScopedDraft &&
+      pendingDraftRestore.storageKey !== getResumeDraftStorageKey(resumeId)
+    ) {
       clearResumeDraftStorageKey(pendingDraftRestore.storageKey);
     }
     setPendingDraftRestore(null);
@@ -883,10 +901,12 @@ const ResumeBuilderContent = () => {
       clearStoredResumeDraft(resumeId);
     }
     setPendingDraftRestore(null);
+    setHasCurrentLocalDraft(false);
     if (resumeId && pendingAttachmentDraftRestore) {
       clearAttachmentDraft(resumeId);
     }
     setPendingAttachmentDraftRestore(null);
+    setHasCurrentAttachmentDraft(false);
   };
 
   const persistAttachmentDraft = (
@@ -899,9 +919,12 @@ const ResumeBuilderContent = () => {
       values.outreachMessage === baselines.outreachMessage
     ) {
       clearAttachmentDraft(resumeId);
+      setHasCurrentAttachmentDraft(false);
       return;
     }
-    writeAttachmentDraft(resumeId, values.coverLetter, values.outreachMessage);
+    setHasCurrentAttachmentDraft(
+      writeAttachmentDraft(resumeId, values.coverLetter, values.outreachMessage)
+    );
   };
 
   const handleCoverLetterChange = (value: string) => {
@@ -1365,7 +1388,9 @@ const ResumeBuilderContent = () => {
       return { label: autoSaveError, tone: 'red' as const };
     }
     if (hasUnsavedChanges) {
-      return { label: t('builder.autoSave.localDraft'), tone: 'amber' as const };
+      return hasCurrentLocalDraft
+        ? { label: t('builder.autoSave.localDraft'), tone: 'amber' as const }
+        : { label: t('builder.autoSave.localDraftUnavailable'), tone: 'red' as const };
     }
     if (resumeId && lastAutoSavedAt) {
       return { label: t('builder.autoSave.saved'), tone: 'green' as const };
@@ -1845,10 +1870,26 @@ const ResumeBuilderContent = () => {
       <ConfirmDialog
         open={showLeaveWithLocalDraftDialog}
         onOpenChange={setShowLeaveWithLocalDraftDialog}
-        title={t('builder.leaveWithLocalDraft.title')}
-        description={t('builder.leaveWithLocalDraft.description')}
-        confirmLabel={t('builder.leaveWithLocalDraft.leave')}
-        cancelLabel={t('builder.leaveWithLocalDraft.stay')}
+        title={t(
+          hasCurrentRecoveryDraft
+            ? 'builder.leaveWithLocalDraft.title'
+            : 'builder.leaveWithoutDraft.title'
+        )}
+        description={t(
+          hasCurrentRecoveryDraft
+            ? 'builder.leaveWithLocalDraft.description'
+            : 'builder.leaveWithoutDraft.description'
+        )}
+        confirmLabel={t(
+          hasCurrentRecoveryDraft
+            ? 'builder.leaveWithLocalDraft.leave'
+            : 'builder.leaveWithoutDraft.leave'
+        )}
+        cancelLabel={t(
+          hasCurrentRecoveryDraft
+            ? 'builder.leaveWithLocalDraft.stay'
+            : 'builder.leaveWithoutDraft.stay'
+        )}
         variant="warning"
         onConfirm={handleLeaveWithLocalDraft}
       />

@@ -117,7 +117,8 @@
       "localDraft": "下書きをローカルに保存しました",
       "saveNow": "今すぐ保存",
       "retrySave": "保存を再試行",
-      "savedButton": "保存済み"
+      "savedButton": "保存済み",
+      "localDraftUnavailable": "ローカル下書きを保存できません"
     },
     "draftRecovery": {
       "title": "ローカル下書きを復元しますか？",
@@ -495,6 +496,12 @@
       "coverLetterGenerateFailed": "カバーレターの生成に失敗しました: {error}",
       "outreachGenerateFailed": "連絡メールの生成に失敗しました: {error}",
       "interviewPrepGenerateFailed": "面接準備の生成に失敗しました: {error}"
+    },
+    "leaveWithoutDraft": {
+      "title": "未保存の変更を残して移動しますか？",
+      "description": "最新の変更をサーバーと同期できず、このブラウザーにも保存できませんでした。今移動すると変更が失われる可能性があります。",
+      "leave": "保存せずに移動",
+      "stay": "編集を続ける"
     }
   },
   "enrichment": {
@@ -950,7 +957,8 @@
       "review": "確認して完了",
       "create": "マスター履歴書を作成",
       "keepAdding": "続けて追加",
-      "backToDashboard": "ダッシュボードに戻る"
+      "backToDashboard": "ダッシュボードに戻る",
+      "openCreated": "作成した履歴書を開く"
     },
     "preview": {
       "label": "ライブ下書き",
@@ -963,7 +971,8 @@
     },
     "errors": {
       "turnFailed": "ウィザードはその回答を保存できませんでした。もう一度お試しください。",
-      "finalizeFailed": "ウィザードはマスター履歴書を作成できませんでした。もう一度お試しください。"
+      "finalizeFailed": "ウィザードはマスター履歴書を作成できませんでした。もう一度お試しください。",
+      "createdNavigationFailed": "マスター履歴書は作成されましたが、このページから自動的に開けませんでした。下のボタンから続行してください。"
     },
     "entry": {
       "kicker": "マスター履歴書の設定",
@@ -981,6 +990,10 @@
         "description": "焦点を絞った質問に答えると、ウィザードが質の高いマスター履歴書の初稿を組み立てます。",
         "action": "ウィザードを開始"
       }
+    },
+    "created": {
+      "title": "マスター履歴書を作成しました",
+      "description": "マスター履歴書を作成しました。開いて編集を続けてください。"
     }
   },
   "tracker": {

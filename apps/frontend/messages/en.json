@@ -117,7 +117,8 @@
       "localDraft": "Draft saved locally",
       "saveNow": "Save now",
       "retrySave": "Retry save",
-      "savedButton": "Saved"
+      "savedButton": "Saved",
+      "localDraftUnavailable": "Local draft unavailable"
     },
     "draftRecovery": {
       "title": "Restore Local Draft?",
@@ -495,6 +496,12 @@
       "coverLetterGenerateFailed": "Failed to generate cover letter: {error}",
       "outreachGenerateFailed": "Failed to generate outreach message: {error}",
       "interviewPrepGenerateFailed": "Failed to generate interview preparation: {error}"
+    },
+    "leaveWithoutDraft": {
+      "title": "Leave With Unsaved Changes?",
+      "description": "Your latest edits could not be synced to the server or saved in this browser. Leaving now may lose those edits.",
+      "leave": "Leave Anyway",
+      "stay": "Keep Editing"
     }
   },
   "enrichment": {
@@ -950,7 +957,8 @@
       "review": "Review & finish",
       "create": "Create master resume",
       "keepAdding": "Keep adding",
-      "backToDashboard": "Back to Dashboard"
+      "backToDashboard": "Back to Dashboard",
+      "openCreated": "Open Created Resume"
     },
     "preview": {
       "label": "Live Draft",
@@ -963,7 +971,8 @@
     },
     "errors": {
       "turnFailed": "The wizard could not save that answer. Try again.",
-      "finalizeFailed": "The wizard could not create your master resume. Try again."
+      "finalizeFailed": "The wizard could not create your master resume. Try again.",
+      "createdNavigationFailed": "Your master resume was created, but this page could not open it automatically. Use the button below to continue."
     },
     "entry": {
       "kicker": "Master Resume Setup",
@@ -981,6 +990,10 @@
         "description": "Answer focused prompts and let the wizard assemble a strong first master resume draft.",
         "action": "Start Wizard"
       }
+    },
+    "created": {
+      "title": "Master Resume Created",
+      "description": "Your master resume was created. Open it to continue editing."
     }
   },
   "tracker": {

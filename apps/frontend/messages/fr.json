@@ -117,7 +117,8 @@
       "localDraft": "Brouillon enregistré localement",
       "saveNow": "Enregistrer maintenant",
       "retrySave": "Réessayer",
-      "savedButton": "Enregistré"
+      "savedButton": "Enregistré",
+      "localDraftUnavailable": "Brouillon local indisponible"
     },
     "draftRecovery": {
       "title": "Restaurer le brouillon local ?",
@@ -495,6 +496,12 @@
       "coverLetterGenerateFailed": "Impossible de générer la lettre de motivation : {error}",
       "outreachGenerateFailed": "Impossible de générer le message de contact : {error}",
       "interviewPrepGenerateFailed": "Impossible de générer la préparation à l'entretien : {error}"
+    },
+    "leaveWithoutDraft": {
+      "title": "Quitter avec des modifications non enregistrées ?",
+      "description": "Vos dernières modifications n’ont pu être ni synchronisées avec le serveur ni enregistrées dans ce navigateur. Les quitter maintenant peut les perdre.",
+      "leave": "Quitter quand même",
+      "stay": "Continuer la modification"
     }
   },
   "enrichment": {
@@ -950,7 +957,8 @@
       "review": "Vérifier et terminer",
       "create": "Créer le CV principal",
       "keepAdding": "Continuer à ajouter",
-      "backToDashboard": "Retour au tableau de bord"
+      "backToDashboard": "Retour au tableau de bord",
+      "openCreated": "Ouvrir le CV créé"
     },
     "preview": {
       "label": "Brouillon en direct",
@@ -963,7 +971,8 @@
     },
     "errors": {
       "turnFailed": "L'assistant n'a pas pu enregistrer cette réponse. Veuillez réessayer.",
-      "finalizeFailed": "L'assistant n'a pas pu créer votre CV principal. Veuillez réessayer."
+      "finalizeFailed": "L'assistant n'a pas pu créer votre CV principal. Veuillez réessayer.",
+      "createdNavigationFailed": "Votre CV principal a été créé, mais cette page n’a pas pu l’ouvrir automatiquement. Utilisez le bouton ci-dessous pour continuer."
     },
     "entry": {
       "kicker": "Configuration du CV principal",
@@ -981,6 +990,10 @@
         "description": "Répondez à des questions ciblées et laissez l'assistant assembler un premier brouillon solide de votre CV principal.",
         "action": "Démarrer l'assistant"
       }
+    },
+    "created": {
+      "title": "CV principal créé",
+      "description": "Votre CV principal a été créé. Ouvrez-le pour continuer à le modifier."
     }
   },
   "tracker": {

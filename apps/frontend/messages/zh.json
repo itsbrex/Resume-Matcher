@@ -117,7 +117,8 @@
       "localDraft": "草稿已在本地保存",
       "saveNow": "立即保存",
       "retrySave": "重试保存",
-      "savedButton": "已保存"
+      "savedButton": "已保存",
+      "localDraftUnavailable": "无法保存本地草稿"
     },
     "draftRecovery": {
       "title": "恢复本地草稿？",
@@ -495,6 +496,12 @@
       "coverLetterGenerateFailed": "生成求职信失败：{error}",
       "outreachGenerateFailed": "生成联系邮件失败：{error}",
       "interviewPrepGenerateFailed": "生成面试准备失败：{error}"
+    },
+    "leaveWithoutDraft": {
+      "title": "要带着未保存的更改离开吗？",
+      "description": "最新更改无法同步到服务器，也无法保存在此浏览器中。现在离开可能会丢失这些更改。",
+      "leave": "仍然离开",
+      "stay": "继续编辑"
     }
   },
   "enrichment": {
@@ -950,7 +957,8 @@
       "review": "审查并完成",
       "create": "创建主简历",
       "keepAdding": "继续添加",
-      "backToDashboard": "返回仪表板"
+      "backToDashboard": "返回仪表板",
+      "openCreated": "打开已创建的简历"
     },
     "preview": {
       "label": "实时草稿",
@@ -963,7 +971,8 @@
     },
     "errors": {
       "turnFailed": "向导无法保存该回答。请重试。",
-      "finalizeFailed": "向导无法创建你的主简历。请重试。"
+      "finalizeFailed": "向导无法创建你的主简历。请重试。",
+      "createdNavigationFailed": "您的主简历已创建，但此页面无法自动打开它。请使用下方按钮继续。"
     },
     "entry": {
       "kicker": "主简历设置",
@@ -981,6 +990,10 @@
         "description": "回答聚焦问题，让向导为你的主简历整理出扎实的初稿。",
         "action": "启动向导"
       }
+    },
+    "created": {
+      "title": "主简历已创建",
+      "description": "您的主简历已创建。打开它以继续编辑。"
     }
   },
   "tracker": {

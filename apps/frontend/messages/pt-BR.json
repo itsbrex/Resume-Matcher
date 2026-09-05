@@ -117,7 +117,8 @@
       "localDraft": "Rascunho salvo localmente",
       "saveNow": "Salvar agora",
       "retrySave": "Tentar salvar novamente",
-      "savedButton": "Salvo"
+      "savedButton": "Salvo",
+      "localDraftUnavailable": "Rascunho local indisponível"
     },
     "draftRecovery": {
       "title": "Restaurar rascunho local?",
@@ -495,6 +496,12 @@
       "coverLetterGenerateFailed": "Falha ao gerar carta de apresentação: {error}",
       "outreachGenerateFailed": "Falha ao gerar mensagem de contato: {error}",
       "interviewPrepGenerateFailed": "Falha ao gerar preparação para entrevista: {error}"
+    },
+    "leaveWithoutDraft": {
+      "title": "Sair com alterações não salvas?",
+      "description": "Não foi possível sincronizar as alterações mais recentes com o servidor nem salvá-las neste navegador. Sair agora pode perder essas alterações.",
+      "leave": "Sair mesmo assim",
+      "stay": "Continuar editando"
     }
   },
   "enrichment": {
@@ -950,7 +957,8 @@
       "review": "Revisar e concluir",
       "create": "Criar currículo mestre",
       "keepAdding": "Continuar adicionando",
-      "backToDashboard": "Voltar ao painel"
+      "backToDashboard": "Voltar ao painel",
+      "openCreated": "Abrir currículo criado"
     },
     "preview": {
       "label": "Rascunho ao vivo",
@@ -963,7 +971,8 @@
     },
     "errors": {
       "turnFailed": "O assistente não conseguiu salvar essa resposta. Tente novamente.",
-      "finalizeFailed": "O assistente não conseguiu criar seu currículo mestre. Tente novamente."
+      "finalizeFailed": "O assistente não conseguiu criar seu currículo mestre. Tente novamente.",
+      "createdNavigationFailed": "Seu currículo mestre foi criado, mas esta página não conseguiu abri-lo automaticamente. Use o botão abaixo para continuar."
     },
     "entry": {
       "kicker": "Configuração do currículo mestre",
@@ -981,6 +990,10 @@
         "description": "Responda a perguntas objetivas e deixe o assistente montar um primeiro rascunho forte do seu currículo mestre.",
         "action": "Iniciar assistente"
       }
+    },
+    "created": {
+      "title": "Currículo mestre criado",
+      "description": "Seu currículo mestre foi criado. Abra-o para continuar editando."
     }
   },
   "tracker": {

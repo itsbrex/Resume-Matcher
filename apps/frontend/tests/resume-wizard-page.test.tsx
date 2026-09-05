@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ResumeWizardPage } from '@/components/resume-wizard/resume-wizard-page';
 import {
@@ -33,6 +33,10 @@ describe('ResumeWizardPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it('renders the intro question and answer textbox', () => {
@@ -206,6 +210,67 @@ describe('ResumeWizardPage', () => {
     expect(screen.getByText(/Engineer/)).toBeInTheDocument();
   });
 
+  it('normalizes malformed nested leaves and history before the restored state is used', async () => {
+    localStorage.setItem(
+      'resume_wizard_draft',
+      JSON.stringify({
+        step: 'question',
+        current_question: { text: 'Safe recovery?', section: 'skills' },
+        resume_data: {
+          personalInfo: { name: 'Ada' },
+          workExperience: [
+            {
+              id: 8,
+              title: 'Engineer',
+              company: 'Acme',
+              years: 2024,
+              description: 'Built a safe parser',
+            },
+          ],
+          education: [],
+          personalProjects: [],
+          additional: { technicalSkills: [null, 42, 'TypeScript'] },
+        },
+        history: [null, { question: 9, answer: {}, section: 'skills' }],
+        asked_count: 99,
+        inferred_skills: [null, 'React'],
+      })
+    );
+
+    render(<ResumeWizardPage />);
+
+    expect(await screen.findByText('Safe recovery?')).toBeInTheDocument();
+    expect(screen.getByText('Built a safe parser')).toBeInTheDocument();
+    expect(screen.getByText('TypeScript')).toBeInTheDocument();
+    expect(screen.getByText('React')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'resumeWizard.actions.back' })
+    ).not.toBeInTheDocument();
+  });
+
+  it('stores a versioned wizard draft and ignores an unknown saved schema version', async () => {
+    const poisonedState = makeState({
+      step: 'question',
+      current_question: { text: 'Do not restore this', section: 'skills' },
+    });
+    localStorage.setItem(
+      'resume_wizard_draft',
+      JSON.stringify({ schemaVersion: 999, state: poisonedState })
+    );
+
+    render(<ResumeWizardPage />);
+
+    expect(
+      await screen.findByText(/Hi — I'll help you build your master resume/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Do not restore this')).not.toBeInTheDocument();
+    await waitFor(() => {
+      const persisted = JSON.parse(localStorage.getItem('resume_wizard_draft') ?? '{}');
+      expect(persisted.schemaVersion).toBe(1);
+      expect(persisted.state.current_question.section).toBe('intro');
+    });
+  });
+
   it('dispatches a skip turn', async () => {
     localStorage.setItem(
       'resume_wizard_draft',
@@ -291,5 +356,51 @@ describe('ResumeWizardPage', () => {
     // Returns to a question step (textbox visible) — no backend turn dispatched.
     expect(await screen.findByRole('textbox')).toBeInTheDocument();
     expect(mockedPostTurn).not.toHaveBeenCalled();
+  });
+
+  it('retains an acknowledged creation when browser storage and navigation fail', async () => {
+    localStorage.setItem(
+      'resume_wizard_draft',
+      JSON.stringify(
+        makeState({
+          step: 'review',
+          current_question: { text: 'Review', section: 'review' },
+          resume_data: {
+            ...createInitialResumeWizardState().resume_data,
+            personalInfo: { name: 'Ada' },
+          },
+        })
+      )
+    );
+    mockedFinalize.mockResolvedValueOnce({
+      message: 'Created',
+      request_id: 'req_2',
+      resume_id: 'resume_committed',
+      processing_status: 'ready',
+      is_master: true,
+    });
+    const nativeSetItem = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (key === 'master_resume_id') throw new DOMException('quota', 'QuotaExceededError');
+      return nativeSetItem.call(this, key, value);
+    });
+    push.mockImplementation(() => {
+      throw new Error('navigation unavailable');
+    });
+
+    render(<ResumeWizardPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'resumeWizard.actions.create' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'resumeWizard.errors.createdNavigationFailed'
+    );
+    expect(mockedFinalize).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByRole('button', { name: 'resumeWizard.actions.create' })
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'resumeWizard.actions.openCreated' }));
+    expect(push).toHaveBeenLastCalledWith('/builder?id=resume_committed');
+    expect(mockedFinalize).toHaveBeenCalledTimes(1);
   });
 });

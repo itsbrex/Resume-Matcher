@@ -361,6 +361,27 @@ describe('builder attachment persistence', () => {
     );
   });
 
+  it('warns that attachment edits have no backup when browser storage and save both fail', async () => {
+    currentSearch = 'id=a&tab=outreach';
+    fetchResume.mockResolvedValue(response({ outreach_message: 'SERVER OUTREACH' }));
+    updateOutreachMessage.mockRejectedValue(new Error('offline'));
+    const Builder = await importBuilder();
+    render(<Builder />);
+    const input = await screen.findByDisplayValue('SERVER OUTREACH');
+    const storage = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Quota exceeded', 'QuotaExceededError');
+    });
+    try {
+      fireEvent.change(input, { target: { value: 'UNSAVED OUTREACH' } });
+      await act(async () => screen.getByRole('button', { name: 'nav.backToDashboard' }).click());
+      expect(screen.getByText('builder.leaveWithoutDraft.description')).toBeInTheDocument();
+      expect(screen.queryByText('builder.leaveWithLocalDraft.description')).not.toBeInTheDocument();
+      expect(push).not.toHaveBeenCalled();
+    } finally {
+      storage.mockRestore();
+    }
+  });
+
   it('requires consent before restoring a resume-scoped attachment draft', async () => {
     localStorage.setItem(
       'resume_builder_attachment_draft:a',

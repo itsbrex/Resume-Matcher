@@ -301,6 +301,77 @@ async def test_ai_turn_missing_next_question_falls_back_to_gap() -> None:
     assert result.current_question.section == "education"
 
 
+@pytest.mark.parametrize(
+    "malformed_result",
+    [
+        {},
+        {
+            "resume_data": _AI_EXPERIENCE_RESULT["resume_data"],
+            "next_question": {"text": "Next?", "section": "education"},
+            "inferred_skills": [],
+            "is_complete": "false",
+        },
+        {
+            "resume_data": _AI_EXPERIENCE_RESULT["resume_data"],
+            "next_question": {"text": "Next?", "section": "education"},
+            "inferred_skills": [None],
+            "is_complete": False,
+        },
+    ],
+)
+async def test_ai_turn_rejects_malformed_complete_envelope_without_advancing(
+    malformed_result: dict,
+) -> None:
+    state = _state_on_section("workExperience")
+    before = state.model_dump()
+
+    with patch(
+        "app.services.resume_wizard.complete_json",
+        new_callable=AsyncMock,
+        return_value=malformed_result,
+    ) as mock_complete:
+        with pytest.raises(ValueError, match="invalid response"):
+            await run_ai_turn(state, "I was an engineer", skip=False)
+
+    assert mock_complete.await_count == 1
+    assert state.model_dump() == before
+
+
+async def test_ai_turn_localizes_missing_question_fallback_to_content_language() -> None:
+    state = _state_on_section("workExperience")
+    result_without_question = {
+        "resume_data": _AI_EXPERIENCE_RESULT["resume_data"],
+        "next_question": None,
+        "inferred_skills": [],
+        "is_complete": False,
+    }
+
+    with (
+        patch("app.services.resume_wizard.get_content_language", return_value="ja"),
+        patch(
+            "app.services.resume_wizard.complete_json",
+            new_callable=AsyncMock,
+            return_value=result_without_question,
+        ),
+    ):
+        result = await run_ai_turn(state, "Acmeでエンジニアをしていました", skip=False)
+
+    assert result.current_question.section == "education"
+    assert result.current_question.text == "学歴について、学校名、学位、在籍期間、表彰や主な履修内容を教えてください。"
+
+
+def test_apply_review_localizes_deterministic_review_copy() -> None:
+    state = _state_on_section("skills")
+    state.resume_data.personalInfo.name = "Aiko"
+
+    with patch("app.services.resume_wizard.get_content_language", return_value="ja"):
+        result = apply_review(state)
+
+    assert result.current_question.text == "マスター履歴書を作成する前に、内容を確認しましょう。"
+    assert result.warnings
+    assert all("Add" not in warning for warning in result.warnings)
+
+
 def test_apply_back_restores_previous_snapshot() -> None:
     state = _state_on_section("skills")
     state.asked_count = 2

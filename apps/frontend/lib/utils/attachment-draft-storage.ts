@@ -47,8 +47,8 @@ export function writeAttachmentDraft(
   resumeId: string,
   coverLetter: string,
   outreachMessage: string
-): void {
-  safeStorage.set(
+): boolean {
+  return safeStorage.set(
     getAttachmentDraftStorageKey(resumeId),
     JSON.stringify({ resumeId, updatedAt: Date.now(), coverLetter, outreachMessage })
   );

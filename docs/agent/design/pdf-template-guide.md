@@ -32,6 +32,9 @@ Backend: GET /resumes/{id}/pdf
 The renderer replaces a disconnected cached browser automatically. On Windows
 event loops that require the thread fallback, a cancelled or timed-out request
 continues to occupy its concurrency slot until its bounded worker exits.
+If page cleanup exceeds its reserve, the shared browser is retired and its
+teardown retains a slot; saturated follow-up requests receive the same immediate
+busy outcome until cleanup finishes, after which a healthy browser is created.
 
 ## Query Parameters
 

@@ -417,6 +417,7 @@ async def _render_with_browser(
                 strict_timeout=True,
             )
         except _PDFDeadlineExceeded:
+            _retire_shared_browser(browser)
             if render_error is None:
                 raise
             logger.exception(
@@ -587,12 +588,64 @@ def _release_render_slot() -> None:
         _active_renders -= 1
 
 
+def _retain_render_slot_for_cleanup() -> None:
+    """Transfer bounded capacity to cleanup before its request slot releases."""
+    global _active_renders
+    with _admission_lock:
+        _active_renders += 1
+
+
+async def _close_retired_browser(
+    browser: Browser,
+    playwright: Playwright | None,
+) -> None:
+    """Own one admission slot until a retired browser is actually torn down."""
+    try:
+        try:
+            await browser.close()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Failed to close retired PDF browser")
+        if playwright is not None:
+            try:
+                await playwright.stop()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Failed to stop retired PDF Playwright instance")
+        if _browser_is_connected(browser):
+            logger.error(
+                "Retired PDF browser is still connected; retaining renderer capacity"
+            )
+            await asyncio.Event().wait()
+    finally:
+        _release_render_slot()
+
+
+def _retire_shared_browser(browser: Browser) -> None:
+    """Detach a browser with an unclosed page and retain capacity for teardown."""
+    global _browser, _playwright
+    if _browser is not browser:
+        return
+
+    playwright = _playwright
+    _browser = None
+    _playwright = None
+    _retain_render_slot_for_cleanup()
+    owner = asyncio.create_task(_close_retired_browser(browser, playwright))
+    _background_owners.add(owner)
+    owner.add_done_callback(_background_owners.discard)
+
+
 async def _release_slot_after_worker(worker: asyncio.Task[bytes]) -> None:
     """Retain capacity until a non-cancellable thread worker actually exits."""
     try:
         await worker
-    except BaseException:
-        pass
+    except asyncio.CancelledError:
+        return
+    except Exception:
+        logger.exception("Detached PDF fallback worker failed")
     finally:
         _release_render_slot()
 

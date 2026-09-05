@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
@@ -249,7 +250,7 @@ async def test_page_creation_is_inside_total_deadline(
 async def test_cleanup_timeout_is_part_of_export_outcome(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A page that cannot close must consume its reserve and time out the export."""
+    """A page that cannot close retires its browser before capacity is reused."""
     never = asyncio.Event()
 
     class UncloseablePage(ControlledPage):
@@ -264,7 +265,13 @@ async def test_cleanup_timeout_is_part_of_export_outcome(
     with pytest.raises(pdf_module.PDFRenderTimeoutError, match="timed out"):
         await pdf_module.render_resume_pdf("data:text/html,cleanup-timeout")
 
+    for _ in range(100):
+        if pdf_module._active_renders == 0:
+            break
+        await asyncio.sleep(0.01)
     assert pdf_module._active_renders == 0
+    assert browser.connected is False
+    assert pdf_module._browser is None
 
 
 async def test_cancellation_closes_page_and_releases_capacity(
@@ -290,16 +297,24 @@ async def test_cancellation_closes_page_and_releases_capacity(
 async def test_cancellation_survives_bounded_cleanup_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A stuck close consumes only its reserve and cannot replace cancellation."""
+    """A stuck teardown retains capacity, then permits a healthy next request."""
     render_gate = asyncio.Event()
     close_gate = asyncio.Event()
+    browser_close_entered = asyncio.Event()
+    browser_close_gate = asyncio.Event()
 
     class SlowClosePage(ControlledPage):
         async def close(self) -> None:
             await close_gate.wait()
 
+    class SlowCloseBrowser(ControlledBrowser):
+        async def close(self) -> None:
+            browser_close_entered.set()
+            await browser_close_gate.wait()
+            self.connected = False
+
     page = SlowClosePage(gate=render_gate)
-    browser = ControlledBrowser(lambda: page)
+    browser = SlowCloseBrowser(lambda: page)
     monkeypatch.setattr(pdf_module, "_browser", browser)
     monkeypatch.setattr(pdf_module, "_PDF_MAX_CONCURRENCY", 1, raising=False)
     monkeypatch.setattr(pdf_module, "_PDF_CLEANUP_RESERVE_SECONDS", 0.02, raising=False)
@@ -310,7 +325,36 @@ async def test_cancellation_survives_bounded_cleanup_failure(
     with pytest.raises(asyncio.CancelledError):
         await task
 
+    try:
+        await asyncio.wait_for(browser_close_entered.wait(), timeout=1)
+        assert pdf_module._browser is None
+        assert pdf_module._active_renders == 1
+        with pytest.raises(pdf_module.PDFRenderOverloadedError, match="busy"):
+            await pdf_module.render_resume_pdf("data:text/html,retiring")
+    finally:
+        close_gate.set()
+        browser_close_gate.set()
+
+    for _ in range(100):
+        if pdf_module._active_renders == 0:
+            break
+        await asyncio.sleep(0.01)
     assert pdf_module._active_renders == 0
+
+    healthy_browser = ControlledBrowser(ControlledPage)
+
+    async def install_replacement(
+        _work_deadline: float,
+        _total_deadline: float,
+    ) -> ControlledBrowser:
+        pdf_module._browser = healthy_browser
+        return healthy_browser
+
+    monkeypatch.setattr(
+        pdf_module, "_replace_disconnected_browser", install_replacement
+    )
+    recovered = await pdf_module.render_resume_pdf("data:text/html,recovered")
+    assert recovered.startswith(b"%PDF")
 
 
 async def test_concurrent_failures_release_all_capacity(
@@ -373,4 +417,22 @@ async def test_cancelled_windows_worker_keeps_its_admission_slot(
         if pdf_module._active_renders == 0:
             break
         await asyncio.sleep(0.01)
+    assert pdf_module._active_renders == 0
+
+
+async def test_detached_worker_failure_is_logged_server_side(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An unexpected detached worker failure must remain observable."""
+
+    async def fail() -> bytes:
+        raise RuntimeError("synthetic detached worker failure")
+
+    pdf_module._active_renders = 1
+    worker = asyncio.create_task(fail())
+    with caplog.at_level(logging.ERROR, logger="app.pdf"):
+        await pdf_module._release_slot_after_worker(worker)
+
+    assert "Detached PDF fallback worker failed" in caplog.text
+    assert "synthetic detached worker failure" in caplog.text
     assert pdf_module._active_renders == 0

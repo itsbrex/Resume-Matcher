@@ -1,18 +1,41 @@
 """Document parsing service using markitdown and LLM."""
 
+import array
 import asyncio
+import io
 import logging
 import re
 import tempfile
 import zipfile
+import zlib
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO, Sequence
 
 import anyio
 from markitdown import MarkItDown
+from pdfminer.ascii85 import ascii85decode, asciihexdecode
+from pdfminer.ccitt import CCITTFaxDecoder
+from pdfminer.lzw import LZWDecoder
 from pdfminer.pdfdocument import PDFDocument
 from pdfminer.pdfpage import PDFPage
 from pdfminer.pdfparser import PDFParser
+from pdfminer.pdftypes import (
+    LITERALS_ASCII85_DECODE,
+    LITERALS_ASCIIHEX_DECODE,
+    LITERALS_CCITTFAX_DECODE,
+    LITERALS_DCT_DECODE,
+    LITERALS_FLATE_DECODE,
+    LITERALS_JBIG2_DECODE,
+    LITERALS_JPX_DECODE,
+    LITERALS_LZW_DECODE,
+    LITERALS_RUNLENGTH_DECODE,
+    LITERAL_CRYPT,
+    PDFStream,
+    apply_png_predictor,
+    apply_tiff_predictor,
+    int_value,
+)
+from pdfminer.psparser import PSKeyword
 
 from app.llm import complete_json, get_llm_config, get_model_name, get_safe_max_tokens
 from app.prompts import PARSE_RESUME_PROMPT
@@ -40,13 +63,262 @@ class DocumentResourceLimitError(ValueError):
 _COMPOUND_FILE_SIGNATURE = bytes.fromhex("D0CF11E0A1B11AE1")
 
 
+class _PDFDecodeBudget:
+    """Track decoded PDF stream bytes across one parser instance."""
+
+    def __init__(self) -> None:
+        self.decoded_bytes = 0
+
+    @property
+    def remaining(self) -> int:
+        """Return the bytes available to the next decoded stream."""
+        return MAX_UNPACKED_DOCUMENT_BYTES - self.decoded_bytes
+
+    def consume(self, size: int) -> None:
+        """Charge one decoded stream to the document-wide limit."""
+        if size > self.remaining:
+            raise DocumentResourceLimitError(
+                "Document expanded content exceeds the 16MB limit."
+            )
+        self.decoded_bytes += size
+
+
+def _append_pdf_output(output: bytearray, chunk: bytes, limit: int) -> None:
+    """Append decoded stream bytes without crossing the remaining budget."""
+    if len(chunk) > limit - len(output):
+        raise DocumentResourceLimitError(
+            "Document expanded content exceeds the 16MB limit."
+        )
+    output.extend(chunk)
+
+
+def _decode_flate_bounded(data: bytes, limit: int) -> bytes:
+    """Incrementally inflate a stream while enforcing its remaining budget."""
+    decoder = zlib.decompressobj()
+    output = bytearray()
+    for offset in range(0, len(data), DOCUMENT_IO_CHUNK_SIZE):
+        pending = data[offset : offset + DOCUMENT_IO_CHUNK_SIZE]
+        while pending:
+            max_output = min(DOCUMENT_IO_CHUNK_SIZE, limit - len(output) + 1)
+            chunk = decoder.decompress(pending, max_output)
+            _append_pdf_output(output, chunk, limit)
+            pending = decoder.unconsumed_tail
+    _append_pdf_output(output, decoder.flush(limit - len(output) + 1), limit)
+    return bytes(output)
+
+
+def _decode_lzw_bounded(data: bytes, limit: int) -> bytes:
+    """Decode an LZW stream one emitted code at a time under a byte limit."""
+    output = bytearray()
+    for chunk in LZWDecoder(io.BytesIO(data)).run():
+        _append_pdf_output(output, chunk, limit)
+    return bytes(output)
+
+
+def _decode_run_length_bounded(data: bytes, limit: int) -> bytes:
+    """Decode Adobe run-length data without first materializing all output."""
+    output = bytearray()
+    offset = 0
+    while offset < len(data):
+        length = data[offset]
+        offset += 1
+        if length == 128:
+            break
+        if length < 128:
+            end = offset + length + 1
+            if end > len(data):
+                raise ValueError("Truncated run-length literal")
+            _append_pdf_output(output, data[offset:end], limit)
+            offset = end
+            continue
+        if offset >= len(data):
+            raise ValueError("Truncated run-length repeat")
+        _append_pdf_output(output, bytes([data[offset]]) * (257 - length), limit)
+        offset += 1
+    return bytes(output)
+
+
+class _BoundedCCITTFaxDecoder(CCITTFaxDecoder):
+    """Collect CCITT rows only while they fit the current stream budget."""
+
+    def __init__(
+        self,
+        width: int,
+        *,
+        bytealign: bool,
+        reversed_bits: bool,
+        limit: int,
+    ) -> None:
+        super().__init__(width, bytealign=bytealign, reversed=reversed_bits)
+        self._chunks: list[bytes] = []
+        self._decoded_size = 0
+        self._limit = limit
+
+    def output_line(self, y: int, bits: Sequence[int]) -> None:
+        """Encode one decoded bitmap row after reserving its output bytes."""
+        row_size = (len(bits) + 7) // 8
+        if row_size > self._limit - self._decoded_size:
+            raise DocumentResourceLimitError(
+                "Document expanded content exceeds the 16MB limit."
+            )
+        row = array.array("B", [0] * row_size)
+        source_bits = [1 - bit for bit in bits] if self.reversed else bits
+        masks = (128, 64, 32, 16, 8, 4, 2, 1)
+        for index, bit in enumerate(source_bits):
+            if bit:
+                row[index // 8] += masks[index % 8]
+        encoded = row.tobytes()
+        self._chunks.append(encoded)
+        self._decoded_size += len(encoded)
+
+    def close(self) -> bytes:
+        """Join already bounded rows into the decoded stream."""
+        return b"".join(self._chunks)
+
+
+def _decode_ccitt_bounded(data: bytes, params: dict[str, Any], limit: int) -> bytes:
+    """Decode the CCITT variant supported by pdfminer with bounded output."""
+    if params.get("K") != -1:
+        raise ValueError("Unsupported CCITT encoding")
+    width = int_value(params.get("Columns"))
+    if width <= 0:
+        raise ValueError("CCITT stream has no positive column count")
+    if (width + 7) // 8 > limit:
+        raise DocumentResourceLimitError(
+            "Document expanded content exceeds the 16MB limit."
+        )
+    decoder = _BoundedCCITTFaxDecoder(
+        width,
+        bytealign=bool(params.get("EncodedByteAlign")),
+        reversed_bits=bool(params.get("BlackIs1")),
+        limit=limit,
+    )
+    decoder.feedbytes(data)
+    return decoder.close()
+
+
+def _apply_pdf_predictor(data: bytes, params: dict[str, Any]) -> bytes:
+    """Apply the same predictor transformations as pdfminer."""
+    predictor = int_value(params.get("Predictor", 1))
+    if predictor == 1:
+        return data
+    colors = int_value(params.get("Colors", 1))
+    columns = int_value(params.get("Columns", 1))
+    bits_per_component = int_value(params.get("BitsPerComponent", 8))
+    if predictor == 2:
+        return apply_tiff_predictor(colors, columns, bits_per_component, data)
+    if predictor >= 10:
+        return apply_png_predictor(
+            predictor, colors, columns, bits_per_component, data
+        )
+    raise ValueError("Unsupported PDF predictor")
+
+
+def _decode_pdf_stream(
+    data: bytes,
+    filters: list[tuple[Any, Any]],
+    limit: int,
+) -> bytes:
+    """Decode every PDF filter while bounding each expansion stage."""
+    for filter_name, raw_params in filters:
+        params = raw_params if isinstance(raw_params, dict) else {}
+        if filter_name in LITERALS_FLATE_DECODE:
+            data = _decode_flate_bounded(data, limit)
+        elif filter_name in LITERALS_LZW_DECODE:
+            data = _decode_lzw_bounded(data, limit)
+        elif filter_name in LITERALS_ASCII85_DECODE:
+            data = ascii85decode(data)
+        elif filter_name in LITERALS_ASCIIHEX_DECODE:
+            data = asciihexdecode(data)
+        elif filter_name in LITERALS_RUNLENGTH_DECODE:
+            data = _decode_run_length_bounded(data, limit)
+        elif filter_name in LITERALS_CCITTFAX_DECODE:
+            data = _decode_ccitt_bounded(data, params, limit)
+        elif (
+            filter_name in LITERALS_DCT_DECODE
+            or filter_name in LITERALS_JBIG2_DECODE
+            or filter_name in LITERALS_JPX_DECODE
+        ):
+            # pdfminer passes already compressed image formats through unchanged.
+            pass
+        elif filter_name == LITERAL_CRYPT:
+            raise ValueError("Encrypted PDF streams are not supported")
+        else:
+            raise ValueError("Unsupported PDF stream filter")
+
+        if len(data) > limit:
+            raise DocumentResourceLimitError(
+                "Document expanded content exceeds the 16MB limit."
+            )
+        if params and "Predictor" in params:
+            data = _apply_pdf_predictor(data, params)
+            if len(data) > limit:
+                raise DocumentResourceLimitError(
+                    "Document expanded content exceeds the 16MB limit."
+                )
+    return data
+
+
+class _BoundedPDFStream(PDFStream):
+    """PDF stream whose decoder charges a request-local shared budget."""
+
+    def __init__(self, stream: PDFStream, budget: _PDFDecodeBudget) -> None:
+        super().__init__(stream.attrs, stream.rawdata, stream.decipher)
+        self._budget = budget
+
+    def decode(self) -> None:
+        """Decode this stream with bounded filter implementations."""
+        if self.rawdata is None:
+            raise ValueError("PDF stream has no raw data")
+        data = self.rawdata
+        if self.decipher:
+            if self.objid is None or self.genno is None:
+                raise ValueError("Encrypted PDF stream is missing an object ID")
+            data = self.decipher(self.objid, self.genno, data, self.attrs)
+        decoded = _decode_pdf_stream(data, self.get_filters(), self._budget.remaining)
+        self._budget.consume(len(decoded))
+        self.data = decoded
+        self.rawdata = None
+
+
+class _BoundedPDFParser(PDFParser):
+    """Install bounded streams locally without patching pdfminer globals."""
+
+    def __init__(self, stream: BinaryIO, budget: _PDFDecodeBudget) -> None:
+        super().__init__(stream)
+        self._budget = budget
+
+    def do_keyword(self, pos: int, token: PSKeyword) -> None:
+        """Replace each newly parsed stream with its bounded counterpart."""
+        super().do_keyword(pos, token)
+        if token is self.KEYWORD_STREAM:
+            stream_pos, parsed = self.curstack[-1]
+            if isinstance(parsed, PDFStream):
+                self.curstack[-1] = (
+                    stream_pos,
+                    _BoundedPDFStream(parsed, self._budget),
+                )
+
+
 def _validate_pdf_container(path: Path) -> None:
-    """Require a readable PDF catalog with at least one page."""
+    """Require a readable PDF whose decoded streams fit a shared budget."""
     try:
         with path.open("rb") as stream:
-            document = PDFDocument(PDFParser(stream))
+            budget = _PDFDecodeBudget()
+            document = PDFDocument(_BoundedPDFParser(stream, budget))
             if next(iter(PDFPage.create_pages(document)), None) is None:
                 raise ValueError("PDF has no pages")
+            seen: set[int] = set()
+            for xref in document.xrefs:
+                for object_id in xref.get_objids():
+                    if object_id in seen:
+                        continue
+                    seen.add(object_id)
+                    value = document.getobj(object_id)
+                    if isinstance(value, PDFStream):
+                        value.get_data()
+    except DocumentResourceLimitError:
+        raise
     except Exception as exc:
         raise DocumentValidationError(
             "The uploaded file is not a valid PDF, DOC, or DOCX document."
@@ -406,7 +678,7 @@ async def parse_document(content: bytes, filename: str) -> str:
         except Exception:
             # The request was already cancelled; consume the worker error after
             # its tempfile cleanup rather than replacing cancellation.
-            pass
+            logger.exception("Document conversion failed after request cancellation")
         raise
 
 

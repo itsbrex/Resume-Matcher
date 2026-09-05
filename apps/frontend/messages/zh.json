@@ -270,14 +270,17 @@
         "newLabel": "新内容",
         "noContent": "无内容",
         "applying": "正在应用...",
-        "loading": "正在生成改进内容..."
+        "loading": "正在生成改进内容...",
+        "retryRefresh": "重试刷新",
+        "refreshing": "正在刷新..."
       },
       "errors": {
         "generationFailed": "生成内容失败，请重试。",
         "applyFailed": "应用变更失败，请重试。",
         "resumeChanged": "简历内容在重新生成后已发生变化。请重新生成后再试。",
         "noChangesToApply": "没有可应用的变更。",
-        "networkError": "网络错误，请检查您的连接。"
+        "networkError": "网络错误，请检查您的连接。",
+        "refreshFailed": "更改已保存，但无法刷新简历。请重试刷新。"
       }
     },
     "jdMatch": {
@@ -529,7 +532,9 @@
       "addingLabel": "新增",
       "existingCount": "（已有 {count} 条）",
       "newCount": "（新增 {count} 条）",
-      "noExistingDescription": "暂无原有描述"
+      "noExistingDescription": "暂无原有描述",
+      "partialFailure": "部分项目未能改进",
+      "partialFailureDescription": "以下项目将保持不变。你可以应用已成功生成的改进，稍后再重试其他项目。"
     },
     "complete": {
       "title": "简历已增强！",

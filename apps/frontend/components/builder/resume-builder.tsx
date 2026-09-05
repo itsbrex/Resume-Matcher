@@ -1940,6 +1940,7 @@ const ResumeBuilderContent = () => {
         regenerateErrors={regenerateWizard.regenerateErrors}
         isGenerating={regenerateWizard.isGenerating}
         isApplying={regenerateWizard.isApplying}
+        needsRefresh={regenerateWizard.needsRefresh}
         error={regenerateWizard.error}
         onGenerate={regenerateWizard.generate}
         onAccept={regenerateWizard.acceptChanges}

@@ -4,14 +4,14 @@
 
 ## Tech Stack
 
-| Component | Technology |
-|-----------|------------|
-| Framework | FastAPI |
-| Database | SQLite (SQLAlchemy 2.0 async + aiosqlite) |
-| AI | LiteLLM (100+ providers) |
-| Doc Parsing | markitdown |
-| Validation | Pydantic |
-| Key encryption | Fernet (`cryptography`) |
+| Component      | Technology                                |
+| -------------- | ----------------------------------------- |
+| Framework      | FastAPI                                   |
+| Database       | SQLite (SQLAlchemy 2.0 async + aiosqlite) |
+| AI             | LiteLLM (100+ providers)                  |
+| Doc Parsing    | markitdown                                |
+| Validation     | Pydantic                                  |
+| Key encryption | Fernet (`cryptography`)                   |
 
 ## Directory Structure
 
@@ -51,15 +51,17 @@ await db.create_application(...) / list_applications / bulk_update_applications
 get_api_key_ciphertexts() / replace_api_keys(...)  # sync; encrypted api_keys table
 ```
 
-**Tables:** `resumes`, `jobs`, `improvements`, `applications`, `api_keys` (encrypted).
+**Tables:** `resumes`, `jobs`, `improvements`, `applications`, `tailoring_previews`, `api_keys` (encrypted).
 DB file: `data/resume_matcher.db`.
 
 **Two engines, one file:** a module-level **async** engine serves the document tables +
 `applications`; a **sync** engine serves the encrypted `api_keys` table (read on the
 synchronous LLM hot path). Both apply PRAGMAs `journal_mode=WAL`, `foreign_keys=ON`,
-`busy_timeout`. The single-master invariant is held by an `asyncio.Lock` plus a partial
-unique index. Jobs' dynamic pipeline fields (`preview_hash(es)`, `job_keywords`,
-`company`/`role`) live in a `metadata_json` JSON column, flattened on read.
+`busy_timeout`. Master changes reserve SQLite writes with `BEGIN IMMEDIATE`; a partial unique index
+provides the final single-master constraint across connections. Jobs' dynamic fields
+(`job_keywords`, `company`/`role`) live in `metadata_json`, flattened on read. Preview
+identity, fingerprints, claims and replay responses live in `tailoring_previews`.
+See [storage transactions](storage-transactions.md) and [confirmation](../features/preview-confirmation.md).
 
 ### Encrypted API keys & migration
 
@@ -73,14 +75,22 @@ unique index. Jobs' dynamic pipeline fields (`preview_hash(es)`, `job_keywords`,
   `database.json.migrated`. Idempotent. `migrate_legacy_keys()` likewise folds legacy
   plaintext keys into the encrypted store.
 
+## Configuration ownership
+
+`Settings.data_dir` owns `resume_matcher.db`, `config.json` and `.secret_key`.
+JSON settings use a same-directory temporary file and atomic replacement; key
+updates use the encrypted SQLite table. These are separate persistence operations.
+Tests install a temporary DATA_DIR before application imports and deny external
+network by default, so normal test runs do not read or overwrite developer settings.
+
 ## LLM Features
 
-| Feature | Description |
-|---------|-------------|
-| API Key Passing | Direct to litellm (avoids race conditions) |
-| JSON Mode | Auto-enabled for supported providers |
-| Retry Logic | 2 retries, temperature 0.1→0.0 |
-| Timeouts | 30s (health), 120s (completion), 180s (JSON) |
+| Feature         | Description                                                                                                           |
+| --------------- | --------------------------------------------------------------------------------------------------------------------- |
+| API Key Passing | Direct to litellm (avoids race conditions)                                                                            |
+| JSON Mode       | Auto-enabled for supported providers                                                                                  |
+| Retry Logic     | Bounded task-schema content retries plus a separate transport-error policy; [exact policy](../llm-integration.md)     |
+| Timeouts        | 30s health; completion/JSON base120s/180s scale by tokens/provider and are capped by the remaining operation deadline |
 
 ## Prompt Guidelines
 
@@ -95,7 +105,7 @@ GET  /api/v1/health              # liveness probe (no LLM call)
 GET  /api/v1/status              # Full status (LLM + DB isolated; 200 on partial failure)
 GET/PUT /api/v1/config/llm-api-key            # no longer persists a key
 GET/POST/DELETE /api/v1/config/api-keys       # per-provider encrypted keys
-POST /api/v1/resumes/upload      # PDF/DOCX
+POST /api/v1/resumes/upload      # PDF/DOC/DOCX
 POST /api/v1/resumes/improve     # Tailor (LLM)
 GET  /api/v1/resumes/{id}/pdf
 DELETE /api/v1/resumes/{id}
@@ -125,13 +135,16 @@ bounded Markdown → LLM parse → token-guarded JSON/status commit → SQLite (
   commit `ready` or `failed`; superseded requests receive 409. If the row is
   deleted while parsing, completion receives 404 and does not recreate or update it.
 
-**Improve:** Resume + Job → Extract keywords (LLM) → Tailor (LLM) → Store. Routers call
+**Preview:** Resume + Job → keywords → targeted differences/refinement → registered preview.
+**Confirm:** validate/claim preview → optional outputs → atomic resume/improvement/response commit.
+Successful retries replay the recorded result. Routers call
 services; services call `app/llm.py`; persistence goes through the async `db` facade.
 `/improve/confirm` also best-effort auto-creates an `applied` card in the tracker.
 
 ## Error Handling
 
 Log details server-side, generic messages to clients:
+
 ```python
 except Exception as e:
     logger.error(f"Failed: {e}")

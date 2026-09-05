@@ -270,14 +270,17 @@
         "newLabel": "Novo",
         "noContent": "Sem conteúdo",
         "applying": "Aplicando...",
-        "loading": "Gerando conteúdo aprimorado..."
+        "loading": "Gerando conteúdo aprimorado...",
+        "retryRefresh": "Tentar atualizar novamente",
+        "refreshing": "Atualizando..."
       },
       "errors": {
         "generationFailed": "Falha ao gerar o conteúdo. Tente novamente.",
         "applyFailed": "Falha ao aplicar as alterações. Tente novamente.",
         "resumeChanged": "O conteúdo do currículo mudou desde a regeneração. Regere e tente novamente.",
         "noChangesToApply": "Não há alterações para aplicar.",
-        "networkError": "Erro de rede. Verifique sua conexão."
+        "networkError": "Erro de rede. Verifique sua conexão.",
+        "refreshFailed": "As alterações foram salvas, mas não foi possível atualizar o currículo. Tente atualizar novamente."
       }
     },
     "jdMatch": {
@@ -529,7 +532,9 @@
       "addingLabel": "Adicionando",
       "existingCount": "({count} existentes)",
       "newCount": "({count} novos)",
-      "noExistingDescription": "Sem descrição existente"
+      "noExistingDescription": "Sem descrição existente",
+      "partialFailure": "Não foi possível aprimorar alguns itens",
+      "partialFailureDescription": "Os itens listados permanecerão iguais. Você pode aplicar as melhorias concluídas e tentar os outros itens novamente mais tarde."
     },
     "complete": {
       "title": "Currículo Aprimorado!",

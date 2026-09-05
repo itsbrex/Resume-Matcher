@@ -26,17 +26,25 @@ The enrichment feature helps users improve their master resume with more detaile
 
 ## Key Files
 
-| File | Purpose |
-|------|---------|
-| `apps/backend/app/prompts/enrichment.py` | AI prompts for analysis and enhancement |
-| `apps/backend/app/routers/enrichment.py` | API endpoints for enrichment workflow |
-| `apps/frontend/hooks/use-enrichment-wizard.ts` | React state management for wizard flow |
-| `apps/frontend/components/enrichment/*.tsx` | UI components for enrichment modal |
+| File                                           | Purpose                                 |
+| ---------------------------------------------- | --------------------------------------- |
+| `apps/backend/app/prompts/enrichment.py`       | AI prompts for analysis and enhancement |
+| `apps/backend/app/routers/enrichment.py`       | API endpoints for enrichment workflow   |
+| `apps/frontend/hooks/use-enrichment-wizard.ts` | React state management for wizard flow  |
+| `apps/frontend/components/enrichment/*.tsx`    | UI components for enrichment modal      |
 
 ## API Endpoints
 
-| Endpoint | Description |
-|----------|-------------|
-| `POST /enrichment/analyze/{resume_id}` | Analyze resume and generate questions |
-| `POST /enrichment/enhance` | Generate enhanced descriptions from answers |
-| `POST /enrichment/apply/{resume_id}` | Apply enhancements to resume |
+| Endpoint                               | Description                                 |
+| -------------------------------------- | ------------------------------------------- |
+| `POST /enrichment/analyze/{resume_id}` | Analyze resume and generate questions       |
+| `POST /enrichment/enhance`             | Generate enhanced descriptions from answers |
+| `POST /enrichment/apply/{resume_id}`   | Apply enhancements to resume                |
+
+## Failure and retry boundaries
+
+Enhancement generation returns `enhancements` and per-item `errors`; an entirely failed attempt returns an error instead of an empty success. The preview names failed items and allows applying the successful items. Failed items retain their original content. Analysis and replacement services validate AI result structure before returning it.
+
+The wizard hook owns one resume and one active attempt. Reset, unmount and resume changes invalidate old results. Apply failure returns to the same preview with its failed-item notice. Regeneration has a separate acknowledged-apply boundary: if reloading the saved resume fails, the UI retries only the refresh. These contracts are tested through the actual hooks and preview components in `tests/wizard-hook-lifecycle.test.tsx` and `tests/enrichment-preview-errors.test.tsx`.
+
+See [AI operation budgets](../architecture/ai-operation-budgets.md) for collection limits, bounded regeneration concurrency and the shared POST deadline.

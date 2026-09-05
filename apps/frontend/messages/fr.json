@@ -270,14 +270,17 @@
         "newLabel": "Nouveau",
         "noContent": "Aucun contenu",
         "applying": "Application...",
-        "loading": "Génération du contenu amélioré..."
+        "loading": "Génération du contenu amélioré...",
+        "retryRefresh": "Réessayer l’actualisation",
+        "refreshing": "Actualisation..."
       },
       "errors": {
         "generationFailed": "Impossible de générer le contenu. Veuillez réessayer.",
         "applyFailed": "Impossible d'appliquer les modifications. Veuillez réessayer.",
         "resumeChanged": "Le contenu du CV a changé depuis la régénération. Veuillez régénérer et réessayer.",
         "noChangesToApply": "Aucune modification à appliquer.",
-        "networkError": "Erreur réseau. Veuillez vérifier votre connexion."
+        "networkError": "Erreur réseau. Veuillez vérifier votre connexion.",
+        "refreshFailed": "Les modifications ont été enregistrées, mais le CV n’a pas pu être actualisé. Réessayez l’actualisation."
       }
     },
     "jdMatch": {
@@ -529,7 +532,9 @@
       "addingLabel": "Ajout",
       "existingCount": "({count} existant(s))",
       "newCount": "({count} nouveau(x))",
-      "noExistingDescription": "Aucune description existante"
+      "noExistingDescription": "Aucune description existante",
+      "partialFailure": "Certains éléments n’ont pas pu être améliorés",
+      "partialFailureDescription": "Les éléments indiqués resteront inchangés. Vous pouvez appliquer les améliorations disponibles et réessayer les autres plus tard."
     },
     "complete": {
       "title": "CV amélioré !",

@@ -270,14 +270,17 @@
         "newLabel": "New",
         "noContent": "No content",
         "applying": "Applying...",
-        "loading": "Generating improved content..."
+        "loading": "Generating improved content...",
+        "retryRefresh": "Retry refresh",
+        "refreshing": "Refreshing..."
       },
       "errors": {
         "generationFailed": "Failed to generate content. Please try again.",
         "applyFailed": "Failed to apply changes. Please try again.",
         "resumeChanged": "Resume content changed since regeneration. Please regenerate and try again.",
         "noChangesToApply": "No changes to apply.",
-        "networkError": "Network error. Please check your connection."
+        "networkError": "Network error. Please check your connection.",
+        "refreshFailed": "Changes were saved, but the resume could not be refreshed. Retry refresh."
       }
     },
     "jdMatch": {
@@ -529,7 +532,9 @@
       "addingLabel": "Adding",
       "existingCount": "({count} existing)",
       "newCount": "({count} new)",
-      "noExistingDescription": "No existing description"
+      "noExistingDescription": "No existing description",
+      "partialFailure": "Some items could not be enhanced",
+      "partialFailureDescription": "The listed items will stay unchanged. You can apply the successful enhancements and try the other items again later."
     },
     "complete": {
       "title": "Resume Enhanced!",

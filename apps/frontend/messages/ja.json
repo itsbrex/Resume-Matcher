@@ -270,14 +270,17 @@
         "newLabel": "新しい内容",
         "noContent": "内容なし",
         "applying": "適用中...",
-        "loading": "改善された内容を生成中..."
+        "loading": "改善された内容を生成中...",
+        "retryRefresh": "再読み込み",
+        "refreshing": "再読み込み中..."
       },
       "errors": {
         "generationFailed": "生成に失敗しました。もう一度お試しください。",
         "applyFailed": "変更の適用に失敗しました。もう一度お試しください。",
         "resumeChanged": "再生成後に履歴書の内容が変更されました。再生成してからもう一度お試しください。",
         "noChangesToApply": "適用できる変更がありません。",
-        "networkError": "ネットワークエラー。接続を確認してください。"
+        "networkError": "ネットワークエラー。接続を確認してください。",
+        "refreshFailed": "変更は保存されましたが、履歴書を再読み込みできませんでした。再読み込みをお試しください。"
       }
     },
     "jdMatch": {
@@ -529,7 +532,9 @@
       "addingLabel": "追加",
       "existingCount": "（既存 {count} 件）",
       "newCount": "（新規 {count} 件）",
-      "noExistingDescription": "既存の説明はありません"
+      "noExistingDescription": "既存の説明はありません",
+      "partialFailure": "一部の項目を改善できませんでした",
+      "partialFailureDescription": "以下の項目は変更されません。成功した改善を適用し、残りの項目は後でもう一度お試しください。"
     },
     "complete": {
       "title": "履歴書を強化しました！",

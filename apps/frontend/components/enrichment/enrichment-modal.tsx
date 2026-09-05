@@ -173,7 +173,12 @@ export function EnrichmentModal({ resumeId, isOpen, onClose, onComplete }: Enric
 
       case 'preview':
         return (
-          <PreviewStep enhancements={state.preview} onApply={applyChanges} onCancel={handleClose} />
+          <PreviewStep
+            enhancements={state.preview}
+            errors={state.itemErrors}
+            onApply={applyChanges}
+            onCancel={handleClose}
+          />
         );
 
       case 'applying':

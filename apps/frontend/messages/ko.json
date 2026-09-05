@@ -248,14 +248,17 @@
         "newLabel": "새 항목",
         "noContent": "내용 없음",
         "applying": "적용 중...",
-        "loading": "개선된 내용을 생성하는 중..."
+        "loading": "개선된 내용을 생성하는 중...",
+        "retryRefresh": "새로 고침 재시도",
+        "refreshing": "새로 고치는 중..."
       },
       "errors": {
         "generationFailed": "콘텐츠 생성에 실패했습니다. 다시 시도해 주세요.",
         "applyFailed": "변경 사항 적용에 실패했습니다. 다시 시도해 주세요.",
         "resumeChanged": "재생성 이후 이력서 내용이 변경되었습니다. 다시 생성한 후 시도해 주세요.",
         "noChangesToApply": "적용할 변경 사항이 없습니다.",
-        "networkError": "네트워크 오류입니다. 연결 상태를 확인해 주세요."
+        "networkError": "네트워크 오류입니다. 연결 상태를 확인해 주세요.",
+        "refreshFailed": "변경 사항은 저장되었지만 이력서를 새로 고치지 못했습니다. 새로 고침을 다시 시도하세요."
       }
     },
     "jdMatch": {
@@ -529,7 +532,9 @@
       "addingLabel": "추가",
       "existingCount": "(기존 {count}개)",
       "newCount": "(신규 {count}개)",
-      "noExistingDescription": "기존 설명 없음"
+      "noExistingDescription": "기존 설명 없음",
+      "partialFailure": "일부 항목을 개선하지 못했습니다",
+      "partialFailureDescription": "아래 항목은 변경되지 않습니다. 성공한 개선 사항을 적용하고 나머지 항목은 나중에 다시 시도할 수 있습니다."
     },
     "complete": {
       "title": "이력서가 개선되었습니다!",

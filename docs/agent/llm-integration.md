@@ -6,15 +6,15 @@
 
 Backend uses LiteLLM to support multiple providers through a unified API:
 
-| Provider | Type | Notes |
-|----------|------|-------|
-| **Ollama** | Local | Free, runs on your machine |
-| **OpenAI** | Cloud | GPT-5 Nano, GPT-4o |
+| Provider             | Type  | Notes                                        |
+| -------------------- | ----- | -------------------------------------------- |
+| **Ollama**           | Local | Free, runs on your machine                   |
+| **OpenAI**           | Cloud | GPT-5 Nano, GPT-4o                           |
 | **Azure AI Foundry** | Cloud | Azure AI Inference / Foundry model endpoints |
-| **Anthropic** | Cloud | Claude Haiku 4.5 |
-| **Google Gemini** | Cloud | Gemini 3 Flash |
-| **OpenRouter** | Cloud | Access to multiple models |
-| **DeepSeek** | Cloud | DeepSeek Chat |
+| **Anthropic**        | Cloud | Claude Haiku 4.5                             |
+| **Google Gemini**    | Cloud | Gemini 3 Flash                               |
+| **OpenRouter**       | Cloud | Access to multiple models                    |
+| **DeepSeek**         | Cloud | DeepSeek Chat                                |
 
 ## API Key Handling
 
@@ -47,12 +47,12 @@ The `complete_json()` function automatically enables `response_format={"type": "
 LiteLLM's Router owns transport retries. The effective policy on the installed
 LiteLLM 1.86.2 stack is:
 
-| Error class | Transport retries | Maximum provider calls |
-|-------------|-------------------|------------------------|
-| Authentication, bad request, content policy | 0 | 1 |
-| Timeout | 2 | 3 |
-| Internal server | 2 | 3 |
-| Rate limit | 3 | 4 |
+| Error class                                       | Transport retries | Maximum provider calls |
+| ------------------------------------------------- | ----------------- | ---------------------- |
+| Authentication, bad request, content policy       | 0                 | 1                      |
+| Timeout                                           | 2                 | 3                      |
+| Internal server                                   | 2                 | 3                      |
+| Rate limit or generic retryable transport failure | 3                 | 4                      |
 
 The internal-server rule uses the Router's exception-local retry override
 because LiteLLM 1.86.2 exposes the setting but omits that class from its policy
@@ -61,6 +61,8 @@ provider backoff, latency, or cost. Caller cancellation is propagated.
 
 After a transport request returns, JSON completions include up to 2 automatic
 content retries for malformed, empty, truncated, or schema-invalid responses.
+The resume parser explicitly permits three content retries; the fourth sampling
+value is 0.7 where supported. Valid sparse resumes do not trigger retries.
 An exhausted transport error escapes immediately and does not start a content
 retry. Content retries increase temperature for response variation when the
 model supports sampling:
@@ -224,19 +226,17 @@ The `/api/v1/health` endpoint validates LLM connectivity.
 
 ## Timeouts
 
-All LLM calls have configurable timeouts:
+Health checks use a 30-second transport timeout. Completion and JSON base transport timeouts are 120 and 180 seconds. `_calculate_timeout` multiplies the base by `max(1, max_tokens / 4096)` and a provider factor: Anthropic/Azure Foundry 1.2, OpenRouter 1.5, Ollama 2.0, and 1.0 for other providers. For example, an 8,192-token Ollama JSON call has a 720-second adaptive transport allowance when called outside an HTTP operation budget.
 
-| Operation | Timeout |
-|-----------|---------|
-| Health checks | 30s |
-| Completions | 120s |
-| JSON operations | 180s |
+AI POST routes also have one absolute operation deadline, starting before validation/preloads and covering all stages, retries and persistence. Each model call uses the smaller of its adaptive transport allowance and the remaining operation time. Content retries recalculate the remaining time; nested work cannot restart the deadline. `REQUEST_TIMEOUT_SECONDS` defaults to 240 and supports 30–1,800 seconds. Align frontend `NEXT_PUBLIC_REQUEST_TIMEOUT_MS` and proxy settings when increasing it for a local model.
+
+These are cooperative cancellation budgets. Owned document/PDF/database cleanup can finish after the work deadline. See [AI operation budgets](architecture/ai-operation-budgets.md) for source/collection limits, bounded item workers and cancellation ownership.
 
 ## Key Files
 
-| File | Purpose |
-|------|---------|
-| `apps/backend/app/llm.py` | LiteLLM wrapper with JSON mode |
-| `apps/backend/app/prompts/templates.py` | Prompt templates |
-| `apps/backend/app/prompts/enrichment.py` | Enrichment-specific prompts |
-| `apps/backend/app/config.py` | Provider configuration |
+| File                                     | Purpose                        |
+| ---------------------------------------- | ------------------------------ |
+| `apps/backend/app/llm.py`                | LiteLLM wrapper with JSON mode |
+| `apps/backend/app/prompts/templates.py`  | Prompt templates               |
+| `apps/backend/app/prompts/enrichment.py` | Enrichment-specific prompts    |
+| `apps/backend/app/config.py`             | Provider configuration         |

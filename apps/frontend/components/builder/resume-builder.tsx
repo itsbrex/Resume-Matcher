@@ -451,115 +451,65 @@ const ResumeBuilderContent = () => {
             setLoadingState('error');
             return;
           }
+          let serverData: ResumeData | null = null;
           if (isResumeDataShape(data.processed_resume)) {
-            // Track if this is a tailored resume (has parent_id)
-            setIsTailoredResume(Boolean(data.parent_id));
-            // Store resume title for downloads
-            setResumeTitle(data.title ?? null);
-            // These values belong to this resume. Explicitly applying empty values
-            // prevents the preceding document's attachment from surviving a switch.
-            const serverCoverLetter = data.cover_letter ?? '';
-            const serverOutreachMessage = data.outreach_message ?? '';
-            setCoverLetter(serverCoverLetter);
-            setOutreachMessage(serverOutreachMessage);
-            attachmentValuesRef.current = {
-              coverLetter: serverCoverLetter,
-              outreachMessage: serverOutreachMessage,
-            };
-            attachmentBaselinesRef.current = attachmentValuesRef.current;
-            setHasUnsavedCoverLetter(false);
-            setHasUnsavedOutreach(false);
-            const attachmentDraft = readAttachmentDraft(resumeId);
-            if (
-              attachmentDraft &&
-              (attachmentDraft.coverLetter !== serverCoverLetter ||
-                attachmentDraft.outreachMessage !== serverOutreachMessage)
-            ) {
-              setPendingAttachmentDraftRestore(attachmentDraft);
-            } else {
-              clearAttachmentDraft(resumeId);
-            }
-            setInterviewPrep(data.interview_prep ?? null);
-            setInterviewPrepError(null);
-            const serverData = data.processed_resume;
-            const localDraft = readStoredResumeDraft(resumeId);
-            setResumeData(serverData);
-            setLastSavedData(serverData);
-            setHasUnsavedChanges(false);
-            setHasCurrentLocalDraft(false);
-            syncedVersionRef.current = editVersionRef.current;
-            unsyncedSinceRef.current = null;
-            setAutoSaveError(null);
-            if (shouldPromptForDraftRestore(localDraft, serverData)) {
-              setPendingDraftRestore(localDraft);
-            } else {
-              clearStoredResumeDraft(resumeId);
-            }
-            setLoadingState('loaded');
-            return;
-          }
-          // Fallback to parsing raw content
-          if (data.raw_resume?.content) {
+            serverData = data.processed_resume;
+          } else if (data.raw_resume?.content) {
             try {
               const parsed: unknown = JSON.parse(data.raw_resume.content);
-              if (!isResumeDataShape(parsed)) {
-                setLoadingState('error');
-                return;
-              }
-              // Track if this is a tailored resume (has parent_id)
-              setIsTailoredResume(Boolean(data.parent_id));
-              // Store resume title for downloads
-              setResumeTitle(data.title ?? null);
-              // These values belong to this resume. Explicitly applying empty values
-              // prevents the preceding document's attachment from surviving a switch.
-              const serverCoverLetter = data.cover_letter ?? '';
-              const serverOutreachMessage = data.outreach_message ?? '';
-              setCoverLetter(serverCoverLetter);
-              setOutreachMessage(serverOutreachMessage);
-              attachmentValuesRef.current = {
-                coverLetter: serverCoverLetter,
-                outreachMessage: serverOutreachMessage,
-              };
-              attachmentBaselinesRef.current = attachmentValuesRef.current;
-              setHasUnsavedCoverLetter(false);
-              setHasUnsavedOutreach(false);
-              const attachmentDraft = readAttachmentDraft(resumeId);
-              if (
-                attachmentDraft &&
-                (attachmentDraft.coverLetter !== serverCoverLetter ||
-                  attachmentDraft.outreachMessage !== serverOutreachMessage)
-              ) {
-                setPendingAttachmentDraftRestore(attachmentDraft);
-              } else {
-                clearAttachmentDraft(resumeId);
-              }
-              setInterviewPrep(data.interview_prep ?? null);
-              setInterviewPrepError(null);
-              const serverData = parsed;
-              const localDraft = readStoredResumeDraft(resumeId);
-              setResumeData(serverData);
-              setLastSavedData(serverData);
-              setHasUnsavedChanges(false);
-              setHasCurrentLocalDraft(false);
-              syncedVersionRef.current = editVersionRef.current;
-              unsyncedSinceRef.current = null;
-              setAutoSaveError(null);
-              if (shouldPromptForDraftRestore(localDraft, serverData)) {
-                setPendingDraftRestore(localDraft);
-              } else {
-                clearStoredResumeDraft(resumeId);
-              }
-              setLoadingState('loaded');
-              return;
+              if (isResumeDataShape(parsed)) serverData = parsed;
             } catch {
-              // Raw content is markdown, not JSON
+              // Raw content may still be markdown instead of structured JSON.
             }
           }
-          // A successful HTTP response is not necessarily an editable resume.
-          // Keep drafts intact until a usable server baseline can be read and
-          // the user explicitly chooses to restore. Context may belong to a
-          // different resume and must never replace this ID's failed snapshot.
-          setLoadingState('error');
+          if (!serverData) {
+            // Preserve drafts until a usable server baseline has been read.
+            setLoadingState('error');
+            return;
+          }
+          // Track if this is a tailored resume (has parent_id)
+          setIsTailoredResume(Boolean(data.parent_id));
+          // Store resume title for downloads
+          setResumeTitle(data.title ?? null);
+          // These values belong to this resume. Explicitly applying empty values
+          // prevents the preceding document's attachment from surviving a switch.
+          const serverCoverLetter = data.cover_letter ?? '';
+          const serverOutreachMessage = data.outreach_message ?? '';
+          setCoverLetter(serverCoverLetter);
+          setOutreachMessage(serverOutreachMessage);
+          attachmentValuesRef.current = {
+            coverLetter: serverCoverLetter,
+            outreachMessage: serverOutreachMessage,
+          };
+          attachmentBaselinesRef.current = attachmentValuesRef.current;
+          setHasUnsavedCoverLetter(false);
+          setHasUnsavedOutreach(false);
+          const attachmentDraft = readAttachmentDraft(resumeId);
+          if (
+            attachmentDraft &&
+            (attachmentDraft.coverLetter !== serverCoverLetter ||
+              attachmentDraft.outreachMessage !== serverOutreachMessage)
+          ) {
+            setPendingAttachmentDraftRestore(attachmentDraft);
+          } else {
+            clearAttachmentDraft(resumeId);
+          }
+          setInterviewPrep(data.interview_prep ?? null);
+          setInterviewPrepError(null);
+          const localDraft = readStoredResumeDraft(resumeId);
+          setResumeData(serverData);
+          setLastSavedData(serverData);
+          setHasUnsavedChanges(false);
+          setHasCurrentLocalDraft(false);
+          syncedVersionRef.current = editVersionRef.current;
+          unsyncedSinceRef.current = null;
+          setAutoSaveError(null);
+          if (shouldPromptForDraftRestore(localDraft, serverData)) {
+            setPendingDraftRestore(localDraft);
+          } else {
+            clearStoredResumeDraft(resumeId);
+          }
+          setLoadingState('loaded');
           return;
         } catch (err) {
           if (cancelled) return;

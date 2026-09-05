@@ -234,17 +234,50 @@ class TestSupportsTemperature:
         assert _supports_temperature("openai/kimi-k2.6", 1.0) is True
 
     @patch("app.llm.litellm.get_model_info")
-    def test_gpt5_only_allows_default(self, mock_get_model_info):
-        """gpt-5 accepts only temperature=1, on OpenAI and Azure alike."""
+    def test_gpt5_only_allows_default(
+        self, mock_get_model_info: MagicMock
+    ) -> None:
+        """Reasoning models without a none mode accept only default temperature."""
         mock_get_model_info.return_value = {
-            "supported_openai_params": ["temperature", "max_tokens"]
+            "supported_openai_params": ["temperature", "max_tokens"],
+            "supports_reasoning": True,
+            "supports_none_reasoning_effort": False,
         }
         assert _supports_temperature("gpt-5.6-terra", 0.1) is False
         assert _supports_temperature("openai/gpt-5-nano-2025-08-07", 0.7) is False
         assert _supports_temperature("azure/gpt-5.6-terra", 0.1) is False
         assert _supports_temperature("gpt-5.6-terra", 1.0) is True
 
-    def test_ollama_gpt5_name_unaffected(self):
+    @patch("app.llm.litellm.get_model_info")
+    def test_gpt51_and_gpt52_allow_sampling_with_reasoning_omitted(
+        self, mock_get_model_info: MagicMock
+    ) -> None:
+        """Models with a no-reasoning mode preserve non-default sampling."""
+        mock_get_model_info.return_value = {
+            "supported_openai_params": ["temperature", "max_tokens"],
+            "supports_reasoning": True,
+            "supports_none_reasoning_effort": True,
+        }
+
+        assert _supports_temperature("gpt-5.1", 0.7) is True
+        assert _supports_temperature("openai/gpt-5.2", 0.1) is True
+
+    @patch("app.llm.litellm.get_model_info")
+    def test_gpt51_and_gpt52_omit_sampling_with_reasoning_enabled(
+        self, mock_get_model_info: MagicMock
+    ) -> None:
+        """Explicit reasoning keeps non-default sampling out of the request."""
+        mock_get_model_info.return_value = {
+            "supported_openai_params": ["temperature", "max_tokens"],
+            "supports_reasoning": True,
+            "supports_none_reasoning_effort": True,
+        }
+
+        assert _supports_temperature("gpt-5.1", 0.7, "medium") is False
+        assert _supports_temperature("openai/gpt-5.2", 0.1, "minimal") is False
+        assert _supports_temperature("gpt-5.1", 1.0, "medium") is True
+
+    def test_ollama_gpt5_name_unaffected(self) -> None:
         """An Ollama model merely named gpt-5-* is local, not real gpt-5.
 
         The ollama early return fires before the carve-out. Pinned so a
@@ -254,7 +287,9 @@ class TestSupportsTemperature:
         assert _supports_temperature("ollama/gpt-5-whatever", 0.7) is True
 
     @patch("app.llm.litellm.get_model_info")
-    def test_unregistered_gpt5_name_already_skipped(self, mock_get_model_info):
+    def test_unregistered_gpt5_name_already_skipped(
+        self, mock_get_model_info: MagicMock
+    ) -> None:
         """A self-hosted server's own gpt-5-named model is not in the registry.
 
         It returns False from the registry-miss path above, before the
@@ -270,10 +305,14 @@ class TestSupportsTemperature:
         assert _supports_temperature("unknown-vendor/model", 0.7) is False
 
     @patch("app.llm.litellm.get_model_info")
-    def test_case_insensitive_model_name(self, mock_get_model_info):
+    def test_case_insensitive_model_name(
+        self, mock_get_model_info: MagicMock
+    ) -> None:
         """Provider-specific checks are case-insensitive."""
         mock_get_model_info.return_value = {
-            "supported_openai_params": ["temperature", "max_tokens"]
+            "supported_openai_params": ["temperature", "max_tokens"],
+            "supports_reasoning": True,
+            "supports_none_reasoning_effort": False,
         }
         assert _supports_temperature("Anthropic/Claude-Opus-4-7", 0.7) is False
         assert _supports_temperature("OPENAI/KIMI-K2.6", 0.7) is False
@@ -311,13 +350,35 @@ class TestGetRetryTemperature:
         assert _get_retry_temperature("anthropic/claude-opus-4-7", 3) is None
 
     @patch("app.llm.litellm.get_model_info")
-    def test_gpt5_returns_none(self, mock_get_model_info):
-        """gpt-5 accepts only temperature=1, so the retry path omits it."""
+    def test_gpt5_returns_none(self, mock_get_model_info: MagicMock) -> None:
+        """Restricted reasoning models omit non-default retry temperatures."""
         mock_get_model_info.return_value = {
-            "supported_openai_params": ["temperature", "max_tokens"]
+            "supported_openai_params": ["temperature", "max_tokens"],
+            "supports_reasoning": True,
+            "supports_none_reasoning_effort": False,
         }
         assert _get_retry_temperature("openai/gpt-5-nano-2025-08-07", 0) is None
         assert _get_retry_temperature("gpt-5.6-terra", 2) is None
+
+    @patch("app.llm.litellm.get_model_info")
+    def test_gpt51_retry_sampling_depends_on_reasoning_mode(
+        self, mock_get_model_info: MagicMock
+    ) -> None:
+        """Content retries vary sampling only when no reasoning is configured."""
+        mock_get_model_info.return_value = {
+            "supported_openai_params": ["temperature", "max_tokens"],
+            "supports_reasoning": True,
+            "supports_none_reasoning_effort": True,
+        }
+
+        assert _get_retry_temperature("openai/gpt-5.1", 0) == 0.1
+        assert _get_retry_temperature("openai/gpt-5.1", 1) == 0.3
+        assert (
+            _get_retry_temperature(
+                "openai/gpt-5.1", 0, reasoning_effort="medium"
+            )
+            is None
+        )
 
     @patch("app.llm.litellm.get_model_info")
     def test_kimi_k26_returns_one(self, mock_get_model_info):

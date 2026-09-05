@@ -959,7 +959,9 @@ async def complete(
             "max_tokens": max_tokens,
             "timeout": _calculate_timeout("completion", max_tokens, config.provider),
         }
-        if _supports_temperature(model_name, temperature):
+        if _supports_temperature(
+            model_name, temperature, reasoning_effort=config.reasoning_effort
+        ):
             kwargs["temperature"] = temperature
         if config.reasoning_effort:
             kwargs["reasoning_effort"] = config.reasoning_effort
@@ -1164,22 +1166,29 @@ def _appears_truncated(data: dict, schema_type: str = "resume") -> bool:
     return False
 
 
-def _supports_temperature(model_name: str, temperature: float | None = None) -> bool:
+def _supports_temperature(
+    model_name: str,
+    temperature: float | None = None,
+    reasoning_effort: str | None = None,
+) -> bool:
     """Check if the model supports the given temperature value.
 
     Uses LiteLLM model registry for capability detection, with
-    provider-specific fallbacks for known restrictions:
+    narrowly scoped fallbacks for known restrictions:
       - Anthropic claude-opus-4.*: temperature is deprecated
       - Moonshot kimi-k2.6: only temperature=1 allowed
-      - gpt-5.*: only temperature=1 allowed, on OpenAI and Azure alike
+      - Reasoning GPT-5 models: non-default values require both registry
+        support for no-reasoning mode and an omitted reasoning effort
 
     Queries LiteLLM's model info for every provider so that capability is
-    always determined from the registry rather than a hardcoded list.
+    determined from the registry rather than a provider-wide exemption.
 
     Args:
         model_name: LiteLLM-formatted model name (from get_model_name).
         temperature: The temperature value to check. If None, returns True
             (caller isn't setting a specific value).
+        reasoning_effort: Configured reasoning mode. None means the request
+            omits the parameter and uses a model's no-reasoning default.
 
     Returns:
         True if the model supports the given temperature, False otherwise.
@@ -1214,25 +1223,54 @@ def _supports_temperature(model_name: str, temperature: float | None = None) -> 
     if "kimi-k2.6" in model_name.lower() and temperature != 1.0:
         return False
 
-    # gpt-5 only allows temperature=1, on OpenAI and Azure alike.
-    if "gpt-5" in model_name.lower() and temperature != 1.0:
-        return False
+    # GPT-5 reasoning models allow flexible sampling only when the model map
+    # advertises a no-reasoning mode and the application omits reasoning_effort.
+    # LiteLLM routes the exact gpt-5-chat* family through its regular chat
+    # transform (versioned names such as gpt-5.1-chat remain reasoning models),
+    # so preserve sampling for that family even though its current registry
+    # metadata says supports_reasoning=True. Provider prefixes are ignored so
+    # OpenAI, Azure, and registered compatible aliases receive the same
+    # capability decision. Unknown compatible aliases returned False above.
+    normalized_model = model_name.rsplit("/", 1)[-1].lower()
+    is_reasoning_gpt5 = (
+        normalized_model.startswith("gpt-5")
+        and not normalized_model.startswith("gpt-5-chat")
+    )
+    if (
+        is_reasoning_gpt5
+        and info.get("supports_reasoning") is True
+        and temperature != 1.0
+    ):
+        supports_no_reasoning = (
+            info.get("supports_none_reasoning_effort") is True
+        )
+        if not supports_no_reasoning or reasoning_effort is not None:
+            return False
 
     return True
 
 
-def _get_retry_temperature(model_name: str, attempt: int, base_temp: float = 0.1) -> float | None:
+def _get_retry_temperature(
+    model_name: str,
+    attempt: int,
+    base_temp: float = 0.1,
+    reasoning_effort: str | None = None,
+) -> float | None:
     """LLM-002: Get temperature for retry attempt.
 
     Returns None if the model does not accept the requested temperature.
     Returns 1.0 for kimi-k2.6, which requires an explicit temperature=1.
-    Otherwise returns increasing temperatures for retry variation.
+    Otherwise returns increasing temperatures for retry variation. GPT-5
+    capability checks include the configured reasoning mode; None means the
+    request omits reasoning_effort rather than sending a literal "none".
     """
     # Moonshot kimi-k2.6 only allows temperature=1.
     if "kimi-k2.6" in model_name.lower():
         return 1.0
 
-    if not _supports_temperature(model_name, base_temp):
+    if not _supports_temperature(
+        model_name, base_temp, reasoning_effort=reasoning_effort
+    ):
         return None
 
     temperatures = [base_temp, 0.3, 0.5, 0.7]
@@ -1419,7 +1457,9 @@ async def complete_json(
                 "timeout": _calculate_timeout("json", max_tokens, config.provider),
             }
             # LLM-002: Increase temperature on retry for variation
-            retry_temp = _get_retry_temperature(model_name, attempt)
+            retry_temp = _get_retry_temperature(
+                model_name, attempt, reasoning_effort=config.reasoning_effort
+            )
             if retry_temp is not None:
                 kwargs["temperature"] = retry_temp
             reasoning_effort = config.reasoning_effort

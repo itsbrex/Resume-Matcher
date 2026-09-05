@@ -44,20 +44,58 @@ The `complete_json()` function automatically enables `response_format={"type": "
 
 ## Retry Logic
 
-JSON completions include 2 automatic retries with progressively lower temperature:
+JSON completions include up to 2 automatic content retries with increasing
+temperature for response variation when the model supports sampling:
 
-- Attempt 1: temperature 0.1
-- Attempt 2: temperature 0.0
+- Initial attempt: temperature 0.1
+- First retry: temperature 0.3
+- Second retry: temperature 0.5
 
 ## Temperature Support
 
-`_supports_temperature()` determines whether `temperature` is sent at all. Capability comes from LiteLLM's model registry, with overrides for restrictions the registry does not record.
+`_supports_temperature()` determines whether `temperature` is sent at all.
+Capability comes from LiteLLM's model registry, with narrow overrides for
+restrictions the registry's supported-parameter list does not fully describe.
 
-The gpt-5 family is one such restriction. The registry lists `temperature` as a supported parameter, which is accurate, but only the default value of 1 is accepted ([litellm#13397](https://github.com/BerriAI/litellm/issues/13397)). This holds on OpenAI and on Azure alike.
+Reasoning GPT-5 models that do not offer a no-reasoning mode, including GPT-5
+Nano, accept only the default temperature of `1`. Models whose registry entry
+advertises `supports_none_reasoning_effort`, including GPT-5.1 and GPT-5.2,
+also accept non-default temperatures when reasoning is omitted. In application
+configuration, cleared reasoning is represented by `reasoning_effort=None`,
+which omits the parameter; the schema does not accept the literal string
+`"none"`. If an explicit reasoning mode such as `minimal` or `medium` is set,
+non-default temperature is omitted. The regular `gpt-5-chat*` family stays on
+LiteLLM's normal chat path and keeps registry-supported sampling.
 
-The override matches on model name rather than provider. Azure gpt-5 deployments resolve to `azure/` prefixed names, and a self-hosted `openai_compatible` model under a custom name is absent from the registry and already treated as unsupported before the override runs.
+The same registry/model/reasoning decision applies to OpenAI, Azure, and
+registered `openai_compatible` aliases. This avoids a blanket
+compatible-provider exemption: a gateway alias for GPT-5 Nano or a GPT-5.1/5.2
+request with explicit reasoning remains restricted. Unknown aliases stay
+conservative and omit temperature, while Ollama keeps its explicit local-model
+fallback.
 
-`_get_retry_temperature()` therefore returns `None` for gpt-5, omitting the parameter so the provider applies its own default.
+`_get_retry_temperature()` uses the same capability decision for content
+retries. It returns `None` when sampling is restricted, so the provider applies
+its default, and preserves retry variation when reasoning is cleared on a model
+that supports no-reasoning sampling.
+
+### PR #929 / issue #975 verification
+
+On the tested LiteLLM 1.86.2 stack, the original default GPT-5 Nano failure
+reported in PR #929 was **not reproduced**. The application already enables
+`litellm.drop_params`, and LiteLLM removes Nano's unsupported non-default
+temperature before the OpenAI SDK serializes the request. This is evidence
+about that dependency stack, not a claim that every gateway accepts the same
+parameters.
+
+The reproduced regression was supported sampling being removed from GPT-5.1
+and GPT-5.2 with reasoning cleared, and from `gpt-5-chat-latest`. The application
+completion and JSON retry paths are covered by
+`tests/integration/test_temperature_request_contract.py`: real LiteLLM and
+OpenAI SDK serialization into an in-memory HTTP transport, using synthetic
+credentials and no provider network traffic. Those tests also retain Nano,
+explicit reasoning, explicit `1.0`, and compatible-alias controls. No live
+provider acceptance or output-quality claim is made by these tests.
 
 ## JSON Extraction
 

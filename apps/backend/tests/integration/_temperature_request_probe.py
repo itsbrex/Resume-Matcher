@@ -128,11 +128,15 @@ async def _probe_case(
     complete_kwargs = dict(router.acompletion.call_args.kwargs)
 
     router.acompletion = AsyncMock(
-        side_effect=[_response("malformed"), _response('{"changes": []}')]
+        side_effect=[
+            _response("malformed"),
+            _response("still malformed"),
+            _response('{"changes": []}'),
+        ]
     )
     with patch("app.llm.get_router", return_value=(router, config)):
         await complete_json(
-            "synthetic prompt", config=config, retries=1, schema_type="diff"
+            "synthetic prompt", config=config, retries=2, schema_type="diff"
         )
     json_kwargs = [dict(call.kwargs) for call in router.acompletion.call_args_list]
 
@@ -155,6 +159,8 @@ async def _main() -> None:
         ("openai", "gpt-5.1", None, 0.7),
         ("openai", "gpt-5.2", None, 0.7),
         ("openai", "gpt-5-chat-latest", None, 0.7),
+        ("openai", "gpt-5.1-chat-latest", None, 0.7),
+        ("openai", "gpt-5.2-chat-latest", None, 0.7),
         ("openai", "gpt-5.1", "medium", 0.7),
         ("openai", "gpt-5-nano-2025-08-07", "minimal", 0.7),
         ("openai_compatible", "gpt-5.1", None, 0.7),

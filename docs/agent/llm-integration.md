@@ -67,6 +67,12 @@ which omits the parameter; the schema does not accept the literal string
 non-default temperature is omitted. The regular `gpt-5-chat*` family stays on
 LiteLLM's normal chat path and keeps registry-supported sampling.
 
+OpenAI documents `none` as the default reasoning level for GPT-5.1 and GPT-5.2
+in its [model guidance](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.2).
+Versioned chat aliases follow their own registered capabilities rather than a
+blanket `-chat` name exemption. Missing or malformed reasoning capability fields
+produce a warning and omit non-default sampling, so registry drift fails conservatively.
+
 The same registry/model/reasoning decision applies to OpenAI, Azure, and
 registered `openai_compatible` aliases. This avoids a blanket
 compatible-provider exemption: a gateway alias for GPT-5 Nano or a GPT-5.1/5.2
@@ -94,7 +100,8 @@ completion and JSON retry paths are covered by
 `tests/integration/test_temperature_request_contract.py`: real LiteLLM and
 OpenAI SDK serialization into an in-memory HTTP transport, using synthetic
 credentials and no provider network traffic. Those tests also retain Nano,
-explicit reasoning, explicit `1.0`, and compatible-alias controls. No live
+explicit reasoning, explicit `1.0`, versioned chat aliases, both automatic retry
+temperatures, and compatible-alias controls. No live
 provider acceptance or output-quality claim is made by these tests.
 
 ## JSON Extraction

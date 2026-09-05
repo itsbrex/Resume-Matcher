@@ -1236,11 +1236,27 @@ def _supports_temperature(
         normalized_model.startswith("gpt-5")
         and not normalized_model.startswith("gpt-5-chat")
     )
+    reasoning_capability = info.get("supports_reasoning")
     if (
         is_reasoning_gpt5
-        and info.get("supports_reasoning") is True
+        and temperature != 1.0
+        and not isinstance(reasoning_capability, bool)
+    ):
+        logging.warning(
+            "Missing or invalid reasoning capability for %s; omitting temperature",
+            model_name,
+        )
+        return False
+    if (
+        is_reasoning_gpt5
+        and reasoning_capability is True
         and temperature != 1.0
     ):
+        if not isinstance(info.get("supports_none_reasoning_effort"), bool):
+            logging.warning(
+                "Missing or invalid no-reasoning capability for %s; omitting temperature",
+                model_name,
+            )
         supports_no_reasoning = (
             info.get("supports_none_reasoning_effort") is True
         )

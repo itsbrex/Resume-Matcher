@@ -62,7 +62,7 @@ def test_gpt51_and_gpt52_preserve_serialized_sampling_when_reasoning_is_cleared(
     for model in ("gpt-5.1", "gpt-5.2"):
         case = serialized_cases[f"openai|{model}|None|0.7"]
         assert case["complete"]["temperature"] == 0.7
-        assert [body["temperature"] for body in case["json"]] == [0.1, 0.3]
+        assert [body["temperature"] for body in case["json"]] == [0.1, 0.3, 0.5]
         assert "reasoning_effort" not in case["complete"]
         assert all("reasoning_effort" not in body for body in case["json"])
 
@@ -75,7 +75,7 @@ def test_registered_compatible_alias_preserves_sampling_only_without_reasoning(
     enabled = serialized_cases["openai_compatible|gpt-5.1|medium|0.7"]
 
     assert cleared["complete"]["temperature"] == 0.7
-    assert [body["temperature"] for body in cleared["json"]] == [0.1, 0.3]
+    assert [body["temperature"] for body in cleared["json"]] == [0.1, 0.3, 0.5]
     assert "temperature" not in enabled["complete"]
     assert all("temperature" not in body for body in enabled["json"])
 
@@ -87,7 +87,7 @@ def test_regular_gpt5_chat_variant_preserves_serialized_sampling(
     case = serialized_cases["openai|gpt-5-chat-latest|None|0.7"]
 
     assert case["complete"]["temperature"] == 0.7
-    assert [body["temperature"] for body in case["json"]] == [0.1, 0.3]
+    assert [body["temperature"] for body in case["json"]] == [0.1, 0.3, 0.5]
 
 
 def test_restricted_and_unknown_models_omit_serialized_sampling(
@@ -111,3 +111,14 @@ def test_explicit_default_temperature_survives_reasoning_mode(
     """The supported explicit GPT-5 default remains serialized as 1.0."""
     case = serialized_cases["openai|gpt-5.1|medium|1.0"]
     assert case["complete"]["temperature"] == 1.0
+
+
+def test_versioned_chat_aliases_follow_the_installed_transport_capabilities(
+    serialized_cases: dict[str, Any],
+) -> None:
+    supported = serialized_cases["openai|gpt-5.1-chat-latest|None|0.7"]
+    restricted = serialized_cases["openai|gpt-5.2-chat-latest|None|0.7"]
+    assert supported["complete"]["temperature"] == 0.7
+    assert [body["temperature"] for body in supported["json"]] == [0.1, 0.3, 0.5]
+    assert "temperature" not in restricted["complete"]
+    assert all("temperature" not in body for body in restricted["json"])

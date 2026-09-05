@@ -339,7 +339,7 @@ def test_artifact_write_failure_marks_tailor_stage_failed(tmp_path: Path, monkey
     from e2e_monitor import __main__ as cli
     save_config_file({"provider": "ollama", "model": "synthetic-model"})
     monkeypatch.setenv("RM_E2E_MONITOR", "1")
-    monkeypatch.setattr(cli, "_ARTIFACTS", tmp_path)
+    monkeypatch.setattr(cli, "_ARTIFACTS", tmp_path / "bundles")
     monkeypatch.setattr(cli, "_BASELINE", tmp_path / "missing.json")
     monkeypatch.setattr(cli, "_jds", lambda: [("synthetic", "Python engineer")])
     monkeypatch.setattr(Servers, "boot", lambda *args, **kwargs: {"frontend_up": False})
@@ -354,7 +354,7 @@ def test_artifact_write_failure_marks_tailor_stage_failed(tmp_path: Path, monkey
 
     monkeypatch.setattr(Bundle, "write_json", staticmethod(write))
     assert cli.main(["sweep", "--no-frontend"]) == 1
-    run = next(path for path in tmp_path.iterdir() if path.is_dir())
+    run = next((tmp_path / "bundles").iterdir())
     trace = json.loads((run / "flow-trace.json").read_text())
     assert next(item for item in trace["stages"] if item["stage"] == "tailor:synthetic")["ok"] is False
 

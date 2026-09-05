@@ -62,11 +62,11 @@ Dashboard → Upload Master Resume → Tailor for Job → View/Edit → Download
 
 ### localStorage
 
-| Key                       | Purpose            |
-| ------------------------- | ------------------ |
-| `master_resume_id`        | Master resume UUID |
-| `resume_builder_draft`    | Auto-saved form    |
-| `resume_builder_settings` | Template prefs     |
+| Key | Purpose |
+| --- | --- |
+| `master_resume_id` | Master resume UUID |
+| `resume_builder_draft:<resumeId>` / `resume_builder_draft:new` | Resume-scoped recovery draft; a failed write is shown as unavailable and never described as saved |
+| `resume_builder_settings` | Template prefs |
 
 ### StatusCache Context
 
@@ -94,12 +94,10 @@ Dashboard → Upload Master Resume → Tailor for Job → View/Edit → Download
 ## API Client
 
 ```typescript
-import { fetchResume, API_BASE } from "@/lib/api";
+import { fetchResume, updateResume } from '@/lib/api/resume';
 
-// Resume operations
-(fetchResume, fetchResumeList, updateResume, deleteResume);
-(uploadJobDescriptions, improveResume, downloadResumePdf);
-
-// Config operations
-(fetchLlmConfig, updateLlmConfig, testLlmConnection);
+const response = await fetchResume(resumeId);
+if (response.processed_resume) {
+  await updateResume(resumeId, response.processed_resume);
+}
 ```

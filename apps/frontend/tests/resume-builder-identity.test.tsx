@@ -378,3 +378,21 @@ describe.each([false, true])(
     );
   }
 );
+
+it.each(['legacy pending', 'partial raw JSON'])('loads a usable %s baseline', async (kind) => {
+  fetchResume.mockResolvedValue(
+    kind === 'legacy pending'
+      ? { processed_resume: REAL_RESUME, raw_resume: { processing_status: 'pending' } }
+      : {
+          processed_resume: null,
+          raw_resume: { content: JSON.stringify({ summary: 'Partial editable resume' }) },
+        }
+  );
+  const Builder = await importBuilder();
+  render(<Builder />);
+  await tick(0);
+  expect(screen.getByTestId('summary')).toHaveTextContent(
+    kind === 'legacy pending' ? REAL_RESUME.summary : 'Partial editable resume'
+  );
+  expect(screen.queryByRole('alert')).toBeNull();
+});

@@ -384,3 +384,15 @@ describe('builder attachment persistence', () => {
     expect(localStorage.getItem('resume_builder_attachment_draft:a')).toContain('LOCAL COVER');
   });
 });
+
+it('does not expose attachment state from an unusable resume response', async () => {
+  fetchResume.mockResolvedValue({
+    ...response({ cover_letter: 'UNUSABLE COVER' }),
+    processed_resume: null,
+    raw_resume: { processing_status: 'processing' },
+  });
+  const Builder = await importBuilder();
+  render(<Builder />);
+  await waitFor(() => expect(fetchResume).toHaveBeenCalled());
+  expect(screen.queryByDisplayValue('UNUSABLE COVER')).not.toBeInTheDocument();
+});

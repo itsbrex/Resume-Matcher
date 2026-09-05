@@ -429,41 +429,46 @@ const ResumeBuilderContent = () => {
         try {
           const data = await fetchResume(resumeId);
           if (cancelled) return;
-          // Track if this is a tailored resume (has parent_id)
-          setIsTailoredResume(Boolean(data.parent_id));
-          // Store resume title for downloads
-          setResumeTitle(data.title ?? null);
-          // These values belong to this resume. Explicitly applying empty values
-          // prevents the preceding document's attachment from surviving a switch.
-          const serverCoverLetter = data.cover_letter ?? '';
-          const serverOutreachMessage = data.outreach_message ?? '';
-          setCoverLetter(serverCoverLetter);
-          setOutreachMessage(serverOutreachMessage);
-          attachmentValuesRef.current = {
-            coverLetter: serverCoverLetter,
-            outreachMessage: serverOutreachMessage,
-          };
-          attachmentBaselinesRef.current = attachmentValuesRef.current;
-          setHasUnsavedCoverLetter(false);
-          setHasUnsavedOutreach(false);
-          const attachmentDraft = readAttachmentDraft(resumeId);
-          if (
-            attachmentDraft &&
-            (attachmentDraft.coverLetter !== serverCoverLetter ||
-              attachmentDraft.outreachMessage !== serverOutreachMessage)
-          ) {
-            setPendingAttachmentDraftRestore(attachmentDraft);
-          } else {
-            clearAttachmentDraft(resumeId);
-          }
-          setInterviewPrep(data.interview_prep ?? null);
-          setInterviewPrepError(null);
           // Prefer processed_resume if available
-          if (data.raw_resume?.processing_status && data.raw_resume.processing_status !== 'ready') {
+          const status = data.raw_resume?.processing_status;
+          if (
+            status === 'processing' ||
+            status === 'failed' ||
+            (status === 'pending' && !isResumeDataShape(data.processed_resume))
+          ) {
             setLoadingState('error');
             return;
           }
           if (isResumeDataShape(data.processed_resume)) {
+            // Track if this is a tailored resume (has parent_id)
+            setIsTailoredResume(Boolean(data.parent_id));
+            // Store resume title for downloads
+            setResumeTitle(data.title ?? null);
+            // These values belong to this resume. Explicitly applying empty values
+            // prevents the preceding document's attachment from surviving a switch.
+            const serverCoverLetter = data.cover_letter ?? '';
+            const serverOutreachMessage = data.outreach_message ?? '';
+            setCoverLetter(serverCoverLetter);
+            setOutreachMessage(serverOutreachMessage);
+            attachmentValuesRef.current = {
+              coverLetter: serverCoverLetter,
+              outreachMessage: serverOutreachMessage,
+            };
+            attachmentBaselinesRef.current = attachmentValuesRef.current;
+            setHasUnsavedCoverLetter(false);
+            setHasUnsavedOutreach(false);
+            const attachmentDraft = readAttachmentDraft(resumeId);
+            if (
+              attachmentDraft &&
+              (attachmentDraft.coverLetter !== serverCoverLetter ||
+                attachmentDraft.outreachMessage !== serverOutreachMessage)
+            ) {
+              setPendingAttachmentDraftRestore(attachmentDraft);
+            } else {
+              clearAttachmentDraft(resumeId);
+            }
+            setInterviewPrep(data.interview_prep ?? null);
+            setInterviewPrepError(null);
             const serverData = data.processed_resume;
             const localDraft = readStoredResumeDraft(resumeId);
             setResumeData(serverData);
@@ -488,6 +493,35 @@ const ResumeBuilderContent = () => {
                 setLoadingState('error');
                 return;
               }
+              // Track if this is a tailored resume (has parent_id)
+              setIsTailoredResume(Boolean(data.parent_id));
+              // Store resume title for downloads
+              setResumeTitle(data.title ?? null);
+              // These values belong to this resume. Explicitly applying empty values
+              // prevents the preceding document's attachment from surviving a switch.
+              const serverCoverLetter = data.cover_letter ?? '';
+              const serverOutreachMessage = data.outreach_message ?? '';
+              setCoverLetter(serverCoverLetter);
+              setOutreachMessage(serverOutreachMessage);
+              attachmentValuesRef.current = {
+                coverLetter: serverCoverLetter,
+                outreachMessage: serverOutreachMessage,
+              };
+              attachmentBaselinesRef.current = attachmentValuesRef.current;
+              setHasUnsavedCoverLetter(false);
+              setHasUnsavedOutreach(false);
+              const attachmentDraft = readAttachmentDraft(resumeId);
+              if (
+                attachmentDraft &&
+                (attachmentDraft.coverLetter !== serverCoverLetter ||
+                  attachmentDraft.outreachMessage !== serverOutreachMessage)
+              ) {
+                setPendingAttachmentDraftRestore(attachmentDraft);
+              } else {
+                clearAttachmentDraft(resumeId);
+              }
+              setInterviewPrep(data.interview_prep ?? null);
+              setInterviewPrepError(null);
               const serverData = parsed;
               const localDraft = readStoredResumeDraft(resumeId);
               setResumeData(serverData);
@@ -993,7 +1027,7 @@ const ResumeBuilderContent = () => {
     showSuccess = true,
     showFailure = true
   ): Promise<boolean> => {
-    if (!resumeId) return false;
+    if (!resumeId || loadingState !== 'loaded') return false;
     const activeResumeId = resumeId;
     const savedContent = attachmentValuesRef.current.coverLetter;
     const savedVersion = coverLetterEditVersionRef.current;
@@ -1095,7 +1129,7 @@ const ResumeBuilderContent = () => {
 
   // Outreach handlers
   async function handleSaveOutreach(showSuccess = true, showFailure = true): Promise<boolean> {
-    if (!resumeId) return false;
+    if (!resumeId || loadingState !== 'loaded') return false;
     const activeResumeId = resumeId;
     const savedContent = attachmentValuesRef.current.outreachMessage;
     const savedVersion = outreachEditVersionRef.current;
@@ -1139,7 +1173,7 @@ const ResumeBuilderContent = () => {
 
   // On-demand generation handlers
   const doGenerateCoverLetter = async () => {
-    if (!resumeId) return;
+    if (!resumeId || loadingState !== 'loaded') return;
     const activeResumeId = resumeId;
     setIsGeneratingCoverLetter(true);
     setShowRegenerateDialog(null);
@@ -1168,7 +1202,7 @@ const ResumeBuilderContent = () => {
   };
 
   const handleGenerateCoverLetter = () => {
-    if (!resumeId) return;
+    if (!resumeId || loadingState !== 'loaded') return;
     // If content exists, show confirmation dialog
     if (coverLetter) {
       setShowRegenerateDialog('cover-letter');
@@ -1178,7 +1212,7 @@ const ResumeBuilderContent = () => {
   };
 
   const doGenerateOutreach = async () => {
-    if (!resumeId) return;
+    if (!resumeId || loadingState !== 'loaded') return;
     const activeResumeId = resumeId;
     setIsGeneratingOutreach(true);
     setShowRegenerateDialog(null);
@@ -1207,7 +1241,7 @@ const ResumeBuilderContent = () => {
   };
 
   const handleGenerateOutreach = () => {
-    if (!resumeId) return;
+    if (!resumeId || loadingState !== 'loaded') return;
     // If content exists, show confirmation dialog
     if (outreachMessage) {
       setShowRegenerateDialog('outreach');
@@ -1217,7 +1251,10 @@ const ResumeBuilderContent = () => {
   };
 
   const canGenerateInterviewPrep =
-    Boolean(resumeId) && isTailoredResume && jobContextStatus === 'available';
+    Boolean(resumeId) &&
+    loadingState === 'loaded' &&
+    isTailoredResume &&
+    jobContextStatus === 'available';
 
   const interviewPrepUnavailableMessage = !resumeId
     ? t('interviewPrep.saveRequiredDescription')

@@ -1,5 +1,7 @@
 """Integration tests for configuration endpoints."""
 
+import json
+from pathlib import Path
 from unittest.mock import patch, AsyncMock
 
 import pytest
@@ -544,7 +546,16 @@ class TestRequiresBaseUrlValidation:
         assert detail["field"] == "api_base"
         assert detail["missing"] == ["api_base"]
 
-    async def test_azure_foundry_with_base_url_is_accepted(self, client):
+    @patch("app.routers.config._log_llm_health_check", new_callable=AsyncMock)
+    async def test_azure_foundry_with_base_url_is_accepted(
+        self,
+        mock_health: AsyncMock,
+        client: AsyncClient,
+        tmp_path: Path,
+        backend_test_data_dir: Path,
+    ) -> None:
+        sentinel_path = backend_test_data_dir / "config.json"
+        sentinel_path.write_text('{"sentinel": "developer-state"}')
         async with client:
             resp = await client.put(
                 "/api/v1/config/llm-api-key",
@@ -556,8 +567,22 @@ class TestRequiresBaseUrlValidation:
             )
 
         assert resp.status_code == 200
+        assert json.loads((tmp_path / "data" / "config.json").read_text())["provider"] == (
+            "azure_foundry"
+        )
+        mock_health.assert_awaited_once()
+        assert sentinel_path.read_text() == '{"sentinel": "developer-state"}'
 
-    async def test_other_providers_are_unaffected(self, client):
+    @patch("app.routers.config._log_llm_health_check", new_callable=AsyncMock)
+    async def test_other_providers_are_unaffected(
+        self,
+        mock_health: AsyncMock,
+        client: AsyncClient,
+        tmp_path: Path,
+        backend_test_data_dir: Path,
+    ) -> None:
+        sentinel_path = backend_test_data_dir / "config.json"
+        sentinel_path.write_text('{"sentinel": "developer-state"}')
         async with client:
             resp = await client.put(
                 "/api/v1/config/llm-api-key",
@@ -565,3 +590,8 @@ class TestRequiresBaseUrlValidation:
             )
 
         assert resp.status_code == 200
+        assert json.loads((tmp_path / "data" / "config.json").read_text())["provider"] == (
+            "openai"
+        )
+        mock_health.assert_awaited_once()
+        assert sentinel_path.read_text() == '{"sentinel": "developer-state"}'

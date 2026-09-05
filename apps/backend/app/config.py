@@ -1,6 +1,9 @@
 """Application configuration using pydantic-settings."""
 
 import json
+import os
+import tempfile
+import threading
 from pathlib import Path
 from typing import Any, Literal
 
@@ -8,25 +11,64 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-# Path to config file for API key persistence
-CONFIG_FILE_PATH = Path(__file__).parent.parent / "data" / "config.json"
 ALLOWED_LOG_LEVELS = ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG")
+_CONFIG_WRITE_LOCK = threading.Lock()
+
+
+def _config_file_path() -> Path:
+    """Return the canonical config path, honoring legacy monkeypatches.
+
+    ``settings.config_path`` owns the runtime location. ``CONFIG_FILE_PATH`` is
+    retained as a compatibility alias for existing callers that monkeypatch
+    that name; only an explicit change from its import-time value wins over the
+    Settings-owned path.
+    """
+    if CONFIG_FILE_PATH != _IMPORTED_CONFIG_FILE_PATH:
+        return CONFIG_FILE_PATH
+    return settings.config_path
 
 
 def _read_config_json() -> dict[str, Any]:
     """Raw read of config.json (no key injection)."""
-    if CONFIG_FILE_PATH.exists():
+    config_path = _config_file_path()
+    if config_path.exists():
         try:
-            return json.loads(CONFIG_FILE_PATH.read_text())
+            return json.loads(config_path.read_text())
         except (json.JSONDecodeError, OSError):
             return {}
     return {}
 
 
 def _write_config_json(config: dict[str, Any]) -> None:
-    """Raw write of config.json (no secret stripping)."""
-    CONFIG_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE_PATH.write_text(json.dumps(config, indent=2))
+    """Atomically replace config.json with one complete snapshot.
+
+    Writes are serialized within the process. Callers provide complete
+    snapshots, so concurrent in-process updates resolve in lock-acquisition
+    order. Cross-process writers still install only complete snapshots because
+    replacement is atomic. In both cases the last completed replacement wins;
+    this primitive does not merge fields.
+    """
+    serialized = json.dumps(config, indent=2)
+    with _CONFIG_WRITE_LOCK:
+        config_path = _config_file_path()
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        file_descriptor, temporary_name = tempfile.mkstemp(
+            dir=config_path.parent,
+            prefix=f".{config_path.name}.",
+            suffix=".tmp",
+        )
+        temporary_path = Path(temporary_name)
+        try:
+            with os.fdopen(file_descriptor, "w", encoding="utf-8") as temporary_file:
+                file_descriptor = -1
+                temporary_file.write(serialized)
+                temporary_file.flush()
+                os.fsync(temporary_file.fileno())
+            os.replace(temporary_path, config_path)
+        finally:
+            if file_descriptor >= 0:
+                os.close(file_descriptor)
+            temporary_path.unlink(missing_ok=True)
 
 
 def load_config_file() -> dict[str, Any]:
@@ -337,3 +379,9 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# Deprecated compatibility alias. Runtime config I/O is owned by
+# ``settings.config_path`` through ``_config_file_path``; downstream tests and
+# integrations that explicitly monkeypatch this name continue to work.
+CONFIG_FILE_PATH = settings.config_path
+_IMPORTED_CONFIG_FILE_PATH = CONFIG_FILE_PATH

@@ -29,8 +29,11 @@ export function PreviewStep({ enhancements, errors = [], onApply, onCancel }: Pr
           </p>
           <p className="text-sm mb-2">{t('enrichment.preview.partialFailureDescription')}</p>
           <ul className="list-disc pl-5 text-sm">
-            {errors.map((error) => (
-              <li key={`${error.item_type}:${error.item_id}`}>{error.title}</li>
+            {errors.map((error, index) => (
+              <li key={`${error.item_type}:${error.item_id}:${index}`}>
+                <span className="font-semibold">{error.title}</span>
+                <span className="block font-sans text-sm">{error.message}</span>
+              </li>
             ))}
           </ul>
         </div>

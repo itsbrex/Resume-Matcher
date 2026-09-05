@@ -5,14 +5,14 @@ import { fetchResume } from '@/lib/api/resume';
 import { analyzeResume, applyEnhancements, generateEnhancements } from '@/lib/api/enrichment';
 
 const route = vi.hoisted(() => ({ resumeId: 'resume-a' }));
-const translate = vi.hoisted(() => (key: string) => key);
+const locale = vi.hoisted(() => ({ t: (key: string) => key }));
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn() }),
   useParams: () => ({ id: route.resumeId }),
 }));
 vi.mock('@/lib/i18n', () => ({
-  useTranslations: () => ({ t: translate }),
+  useTranslations: () => ({ t: locale.t }),
 }));
 vi.mock('@/lib/context/status-cache', () => ({
   useStatusCache: () => ({ decrementResumes: vi.fn(), setHasMasterResume: vi.fn() }),
@@ -233,4 +233,22 @@ describe('resume viewer enrichment completion', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(mockedApplyEnhancements).toHaveBeenCalledTimes(1);
   });
+});
+
+it('preserves an acknowledged enrichment refresh failure through a UI language change', async () => {
+  mockedFetchResume
+    .mockResolvedValueOnce(resume('Before'))
+    .mockRejectedValueOnce(new Error('offline'))
+    .mockResolvedValue(resume('After'));
+  const view = render(<ResumeViewerPage />);
+  await reachSavedCompletion();
+  fireEvent.click(screen.getByRole('button', { name: 'enrichment.complete.doneButton' }));
+  await screen.findByRole('alert');
+  locale.t = (key: string) => key;
+  view.rerender(<ResumeViewerPage />);
+  expect(screen.getByRole('button', { name: 'enrichment.complete.retryRefresh' })).toBeVisible();
+  expect(mockedFetchResume).toHaveBeenCalledTimes(2);
+  fireEvent.click(screen.getByRole('button', { name: 'enrichment.complete.retryRefresh' }));
+  await waitFor(() => expect(screen.getByTestId('resume-name')).toHaveTextContent('After'));
+  expect(mockedApplyEnhancements).toHaveBeenCalledTimes(1);
 });

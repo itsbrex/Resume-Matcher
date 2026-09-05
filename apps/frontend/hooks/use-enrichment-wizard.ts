@@ -4,6 +4,7 @@
  */
 
 import { useReducer, useCallback, useEffect } from 'react';
+import { useTranslations } from '@/lib/i18n';
 import { useOperationOwner } from './use-operation-owner';
 import {
   analyzeResume,
@@ -171,6 +172,7 @@ function wizardReducer(state: WizardState, action: WizardAction): WizardState {
 
 // Hook
 export function useEnrichmentWizard(resumeId: string) {
+  const { t } = useTranslations();
   const [state, dispatch] = useReducer(wizardReducer, initialState);
   const { begin, isCurrent, invalidate } = useOperationOwner(resumeId);
 
@@ -230,7 +232,6 @@ export function useEnrichmentWizard(resumeId: string) {
   const generateEnhancementsFromAnswers = useCallback(async () => {
     const token = begin();
     if (token === null) return;
-    dispatch({ type: 'START_GENERATION' });
 
     try {
       // Convert answers to API format
@@ -241,6 +242,11 @@ export function useEnrichmentWizard(resumeId: string) {
           answer,
         }));
 
+      if (answersArray.length === 0) {
+        dispatch({ type: 'SET_ERROR', error: t('enrichment.error.answerRequired') });
+        return;
+      }
+      dispatch({ type: 'START_GENERATION' });
       const result = await generateEnhancements(resumeId, answersArray);
       if (!isCurrent(token)) return;
 
@@ -256,7 +262,7 @@ export function useEnrichmentWizard(resumeId: string) {
         error: error instanceof Error ? error.message : 'Failed to generate enhancements',
       });
     }
-  }, [resumeId, state.answers, begin, isCurrent]);
+  }, [resumeId, state.answers, begin, isCurrent, t]);
 
   // Apply enhancements to resume
   const applyChanges = useCallback(async () => {
@@ -291,7 +297,7 @@ export function useEnrichmentWizard(resumeId: string) {
     if (state.preview.length > 0) {
       // We had preview, retry apply
       dispatch({ type: 'GENERATION_COMPLETE', preview: state.preview, errors: state.itemErrors });
-    } else if (Object.keys(state.answers).length > 0) {
+    } else if (state.questions.length > 0) {
       // We had answers, go back to questions
       dispatch({
         type: 'ANALYSIS_COMPLETE',

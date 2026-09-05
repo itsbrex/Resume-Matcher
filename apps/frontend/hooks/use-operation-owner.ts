@@ -1,12 +1,12 @@
 'use client';
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useLayoutEffect, useRef } from 'react';
 
 /** Async results belong to one mounted context and one uninterrupted operation. */
 export function useOperationOwner(contextKey: string) {
-  const owner = useRef({ key: contextKey, version: 0, mounted: true });
+  const owner = useRef({ key: contextKey, version: 0, mounted: false });
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     owner.current = { key: contextKey, version: owner.current.version + 1, mounted: true };
     return () => {
       owner.current.mounted = false;

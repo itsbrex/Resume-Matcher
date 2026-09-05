@@ -159,7 +159,6 @@ export default function TailorPage() {
     let confirmed = confirmedResponses.current.get(result);
     if (!confirmed) {
       confirmed = await confirmImproveResume(buildConfirmPayload(result));
-      if (!isCurrent(token)) return;
       // Acknowledgement is durable even if a later client effect fails.
       confirmedResponses.current.set(result, confirmed);
     }
@@ -273,6 +272,7 @@ export default function TailorPage() {
 
   // User rejects changes
   const handleRejectChanges = () => {
+    if (confirmationBusy.current) return;
     invalidate();
     confirmationBusy.current = false;
     setIsConfirming(false);
@@ -283,6 +283,7 @@ export default function TailorPage() {
   };
 
   const handleCloseDiffModal = () => {
+    if (confirmationBusy.current) return;
     invalidate();
     confirmationBusy.current = false;
     setIsConfirming(false);
@@ -516,7 +517,7 @@ export default function TailorPage() {
       <ConfirmDialog
         open={showMissingDiffDialog}
         onOpenChange={(open) => {
-          if (!open) {
+          if (!open && !missingDiffConfirmInFlight.current) {
             handleCloseMissingDiffDialog();
           }
         }}
@@ -527,8 +528,11 @@ export default function TailorPage() {
         variant="warning"
         closeOnConfirm={false}
         onConfirm={handleMissingDiffConfirm}
-        onCancel={handleCloseMissingDiffDialog}
+        onCancel={() => {
+          if (!missingDiffConfirmInFlight.current) handleCloseMissingDiffDialog();
+        }}
         confirmDisabled={isLoading || !missingDiffResult}
+        cancelDisabled={isLoading}
         errorMessage={missingDiffError ?? undefined}
       />
     </div>

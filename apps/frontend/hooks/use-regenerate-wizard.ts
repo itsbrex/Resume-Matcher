@@ -15,6 +15,7 @@ import { useTranslations } from '@/lib/i18n';
 interface UseRegenerateWizardProps {
   resumeId: string;
   outputLanguage?: string;
+  /** Refresh the acknowledged resume; reject if refresh fails so Retry can fetch again. */
   onSuccess?: () => void | Promise<void>;
   onError?: (error: string) => void;
 }

@@ -216,3 +216,14 @@ describe('enrichment partial-result visibility', () => {
     expect(result.current.state.itemErrors).toEqual([]);
   });
 });
+
+it('rejects blank enrichment answers before requesting generation and returns to questions on retry', async () => {
+  const { result } = renderHook(() => useEnrichmentWizard('a'));
+  await act(async () => result.current.startAnalysis());
+  act(() => result.current.setAnswer('q', '  '));
+  await act(async () => result.current.generateEnhancements());
+  expect(api.enhance).not.toHaveBeenCalled();
+  expect(result.current.state.error).toBe('enrichment.error.answerRequired');
+  act(() => result.current.retry());
+  expect(result.current.state.step).toBe('questions');
+});

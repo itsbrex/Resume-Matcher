@@ -553,7 +553,8 @@
     },
     "error": {
       "title": "Une erreur s'est produite",
-      "unexpected": "Une erreur inattendue s'est produite"
+      "unexpected": "Une erreur inattendue s'est produite",
+      "answerRequired": "Répondez à au moins une question avant de générer des améliorations."
     }
   },
   "tailor": {

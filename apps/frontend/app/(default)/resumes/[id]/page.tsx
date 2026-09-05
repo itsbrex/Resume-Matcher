@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useState, useRef } from 'react';
+import React, { useEffect, useMemo, useState, useRef, useLayoutEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -35,6 +35,10 @@ type ProcessingStatus = 'pending' | 'processing' | 'ready' | 'failed';
 
 export default function ResumeViewerPage() {
   const { t } = useTranslations();
+  const translationsRef = useRef(t);
+  useLayoutEffect(() => {
+    translationsRef.current = t;
+  }, [t]);
   const { uiLanguage } = useLanguage();
   const params = useParams();
   const router = useRouter();
@@ -97,24 +101,24 @@ export default function ResumeViewerPage() {
           setResumeData(data.processed_resume as ResumeData);
           setError(null);
         } else if (status === 'failed') {
-          setError(t('resumeViewer.errors.processingFailed'));
+          setError(translationsRef.current('resumeViewer.errors.processingFailed'));
         } else if (status === 'processing') {
-          setError(t('resumeViewer.errors.stillProcessing'));
+          setError(translationsRef.current('resumeViewer.errors.stillProcessing'));
         } else if (data.raw_resume?.content) {
           // Try to parse raw_resume content as JSON (for tailored resumes stored as JSON)
           try {
             const parsed = JSON.parse(data.raw_resume.content);
             setResumeData(parsed as ResumeData);
           } catch {
-            setError(t('resumeViewer.errors.notProcessedYet'));
+            setError(translationsRef.current('resumeViewer.errors.notProcessedYet'));
           }
         } else {
-          setError(t('resumeViewer.errors.noDataAvailable'));
+          setError(translationsRef.current('resumeViewer.errors.noDataAvailable'));
         }
       } catch (err) {
         if (!isCurrentResumeLoad(token)) return;
         console.error('Failed to load resume:', err);
-        setError(t('resumeViewer.errors.failedToLoad'));
+        setError(translationsRef.current('resumeViewer.errors.failedToLoad'));
       } finally {
         if (isCurrentResumeLoad(token)) setLoading(false);
       }
@@ -122,7 +126,7 @@ export default function ResumeViewerPage() {
 
     loadResume();
     setIsMasterResume(localStorage.getItem('master_resume_id') === resumeId);
-  }, [resumeId, t, beginResumeLoad, isCurrentResumeLoad]);
+  }, [resumeId, beginResumeLoad, isCurrentResumeLoad]);
 
   const handleRetryProcessing = async () => {
     if (!resumeId) return;

@@ -553,7 +553,8 @@
     },
     "error": {
       "title": "Algo deu errado",
-      "unexpected": "Ocorreu um erro inesperado"
+      "unexpected": "Ocorreu um erro inesperado",
+      "answerRequired": "Responda a pelo menos uma pergunta antes de gerar melhorias."
     }
   },
   "tailor": {

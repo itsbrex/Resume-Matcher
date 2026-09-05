@@ -31,6 +31,9 @@ describe('partial enrichment preview', () => {
     );
     expect(screen.getByRole('alert')).toHaveTextContent('enrichment.preview.partialFailure');
     expect(screen.getByRole('alert')).toHaveTextContent('Portfolio');
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Enhancement unavailable. Please try again.'
+    );
     expect(screen.getByText('Built Python tools')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'enrichment.preview.applyButton' })).toBeEnabled();
   });

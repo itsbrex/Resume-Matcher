@@ -553,7 +553,8 @@
     },
     "error": {
       "title": "出现错误",
-      "unexpected": "发生了未预期的错误"
+      "unexpected": "发生了未预期的错误",
+      "answerRequired": "请至少回答一个问题后再生成改进内容。"
     }
   },
   "tailor": {

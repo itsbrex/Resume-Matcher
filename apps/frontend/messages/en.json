@@ -553,7 +553,8 @@
     },
     "error": {
       "title": "Something went wrong",
-      "unexpected": "An unexpected error occurred"
+      "unexpected": "An unexpected error occurred",
+      "answerRequired": "Answer at least one question before generating improvements."
     }
   },
   "tailor": {

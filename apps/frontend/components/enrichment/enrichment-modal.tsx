@@ -70,6 +70,15 @@ export function EnrichmentModal({ resumeId, isOpen, onClose, onComplete }: Enric
     };
   }, [isOpen, state.step, startAnalysis]);
 
+  useEffect(() => {
+    if (!isOpen) {
+      invalidate();
+      reset();
+      setRefreshFailed(false);
+      setIsRefreshing(false);
+    }
+  }, [isOpen, invalidate, reset]);
+
   // Handle close
   const handleClose = () => {
     invalidate();

@@ -200,3 +200,19 @@ describe('actual tailor page transaction boundaries', () => {
     expect(api.push).toHaveBeenLastCalledWith('/resumes/tailored');
   });
 });
+
+it('keeps missing-diff confirmation open while its durable request is pending', async () => {
+  const pending = deferred<typeof confirmed>();
+  api.confirm.mockReturnValueOnce(pending.promise);
+  api.preview.mockResolvedValue({ ...preview, data: { ...preview.data, diff_summary: null } });
+  render(<TailorPage />);
+  await act(async () => {});
+  await generate();
+  fireEvent.click(screen.getByRole('button', { name: 'tailor.missingDiffDialog.confirmLabel' }));
+  const cancel = screen.getByRole('button', { name: 'common.cancel' });
+  expect(cancel).toBeDisabled();
+  fireEvent.click(cancel);
+  await act(async () => pending.resolve(confirmed));
+  expect(api.resumes).toHaveBeenCalledTimes(1);
+  expect(api.push).toHaveBeenLastCalledWith('/resumes/tailored');
+});

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from playwright.async_api import Route, async_playwright
+from playwright.async_api import Error as PlaywrightError, Route, async_playwright
 
 
 def resume(identity: str) -> dict[str, Any]:
@@ -50,6 +50,7 @@ async def check_flow(base_url: str, output: Path) -> None:
     release_a = asyncio.Event()
     completed_a = asyncio.Event()
     requests: list[str] = []
+    abandoned_responses: list[str] = []
     errors: list[str] = []
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch()
@@ -95,9 +96,16 @@ async def check_flow(base_url: str, output: Path) -> None:
                 if identity == "a" and not release_a.is_set():
                     pending_a.set()
                     await asyncio.wait_for(release_a.wait(), 45)
-                await route.fulfill(json={"data": resume(identity)})
-                if identity == "a":
-                    completed_a.set()
+                try:
+                    await route.fulfill(json={"data": resume(identity)})
+                except PlaywrightError:
+                    if identity != "a" or not release_a.is_set():
+                        raise
+                    # Going Back may cancel this abandoned navigation request.
+                    abandoned_responses.append(route.request.url)
+                finally:
+                    if identity == "a":
+                        completed_a.set()
                 return
             if url.path.endswith("/resumes/list"):
                 data: Any = {
@@ -141,7 +149,7 @@ async def check_flow(base_url: str, output: Path) -> None:
         page.set_default_timeout(20000)
         page.on("pageerror", lambda error: errors.append(str(error)))
         try:
-            await page.goto(f"{base_url}/dashboard", wait_until="networkidle")
+            await page.goto(f"{base_url}/dashboard", wait_until="domcontentloaded")
             await page.get_by_text("A route card", exact=True).click()
             await page.wait_for_url("**/resumes/a")
             await asyncio.wait_for(pending_a.wait(), 20)
@@ -151,7 +159,9 @@ async def check_flow(base_url: str, output: Path) -> None:
             await page.get_by_text("Bob Synthetic", exact=True).wait_for()
             release_a.set()
             await asyncio.wait_for(completed_a.wait(), 20)
-            await page.wait_for_load_state("networkidle")
+            assert next(i for i, request in enumerate(requests) if "resume_id=a" in request) < next(i for i, request in enumerate(requests) if "resume_id=b" in request)
+            # This is a browser navigation/order check; commit-boundary stale
+            # result ownership is covered separately by operation-owner tests.
             body = await page.locator("body").inner_text()
             assert (
                 "bob synthetic" in body.lower()
@@ -172,14 +182,14 @@ async def check_flow(base_url: str, output: Path) -> None:
             await page.get_by_role("button", name="Edit Resume", exact=True).click()
             await page.wait_for_url("**/builder?id=b")
             await page.goto(
-                f"{base_url}/builder?id=a&tab=cover-letter", wait_until="networkidle"
+                f"{base_url}/builder?id=a&tab=cover-letter", wait_until="domcontentloaded"
             )
             textbox = page.get_by_role("textbox")
+            await page.wait_for_function("document.querySelector('textarea')?.value === 'ALICE COVER'")
             assert await textbox.input_value() == "ALICE COVER"
             await page.evaluate(
                 "window.history.pushState(null, '', '/builder?id=b&tab=cover-letter')"
             )
-            await page.wait_for_load_state("networkidle")
             await page.wait_for_selector("textarea", state="detached")
             assert "ALICE COVER" not in await page.locator("body").inner_text()
             await page.get_by_role(
@@ -196,9 +206,11 @@ async def check_flow(base_url: str, output: Path) -> None:
             )
             second = await context.new_page()
             second.set_default_timeout(20000)
+            second.on("pageerror", lambda error: errors.append(str(error)))
             await second.goto(
-                f"{base_url}/builder?id=a&tab=cover-letter", wait_until="networkidle"
+                f"{base_url}/builder?id=a&tab=cover-letter", wait_until="domcontentloaded"
             )
+            await second.wait_for_function("document.querySelector('textarea')?.value === 'ALICE COVER'")
             assert await second.get_by_role("textbox").input_value() == "ALICE COVER"
             assert await textbox.input_value() == "BOB LOCAL DRAFT"
             await page.screenshot(path=str(output / "builder-b.png"))
@@ -208,13 +220,14 @@ async def check_flow(base_url: str, output: Path) -> None:
                 json.dumps(
                     {
                         "passed": [
-                            "viewer A→Back→B with late A",
+                            "viewer A→Back→B request ordering",
                             "actual PDF download for B",
                             "viewer edit navigation",
                             "builder query identity resets absent attachment",
                             "two-tab draft isolation",
                         ],
                         "requests": requests,
+                        "abandoned_navigation_responses": abandoned_responses,
                         "page_errors": errors,
                     },
                     indent=2,

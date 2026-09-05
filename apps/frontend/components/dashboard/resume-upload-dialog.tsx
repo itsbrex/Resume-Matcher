@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -51,6 +51,7 @@ export function ResumeUploadDialog({
   } | null>(null);
   const [failedResumeId, setFailedResumeId] = useState<string | null>(null);
   const [isRetryingProcessing, setIsRetryingProcessing] = useState(false);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isControlled = controlledOpen !== undefined;
   const isOpen = isControlled ? controlledOpen : internalOpen;
   const setIsOpen = (nextOpen: boolean) => {
@@ -61,6 +62,15 @@ export function ResumeUploadDialog({
   };
 
   const UPLOAD_URL = getUploadUrl();
+
+  const clearScheduledClose = useCallback(() => {
+    if (closeTimerRef.current !== null) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => clearScheduledClose, [clearScheduledClose]);
 
   const handleUploadSuccess = ({
     resumeId,
@@ -73,14 +83,12 @@ export function ResumeUploadDialog({
   }) => {
     setUploadFeedback({ type: 'success', message });
     setFailedResumeId(null);
-
-    // Defer parent state update to avoid setState during render
-    setTimeout(() => {
-      onUploadComplete?.(resumeId);
-    }, 0);
+    onUploadComplete?.(resumeId);
 
     // Close dialog after a short delay to show success state
-    setTimeout(() => {
+    clearScheduledClose();
+    closeTimerRef.current = setTimeout(() => {
+      closeTimerRef.current = null;
       setIsOpen(false);
       setUploadFeedback(null);
       setFailedResumeId(null);
@@ -96,6 +104,7 @@ export function ResumeUploadDialog({
       getInputProps,
       openFileDialog,
       removeFile,
+      clearFiles,
       handleDragEnter,
       handleDragLeave,
       handleDragOver,
@@ -153,6 +162,23 @@ export function ResumeUploadDialog({
       }
     },
   });
+
+  const clearFilesRef = useRef(clearFiles);
+  const wasOpenRef = useRef(isOpen);
+
+  useEffect(() => {
+    clearFilesRef.current = clearFiles;
+  }, [clearFiles]);
+
+  useEffect(() => {
+    if (wasOpenRef.current && !isOpen) {
+      clearScheduledClose();
+      clearFilesRef.current();
+      setUploadFeedback(null);
+      setFailedResumeId(null);
+    }
+    wasOpenRef.current = isOpen;
+  }, [clearScheduledClose, isOpen]);
 
   const currentFile = files[0];
   const displayErrors = uploadFeedback?.type === 'error' ? [uploadFeedback.message] : errors;

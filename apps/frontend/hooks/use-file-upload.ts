@@ -3,12 +3,16 @@
 import type React from 'react';
 import {
   useCallback,
+  useEffect,
   useRef,
   useState,
   type ChangeEvent,
   type DragEvent,
   type InputHTMLAttributes,
 } from 'react';
+import { apiFetch } from '@/lib/api/client';
+
+type UploadOperation = { controller: AbortController };
 
 export type FileMetadata = {
   name: string;
@@ -103,23 +107,74 @@ export const useFileUpload = (
 
   const inputRef = useRef<HTMLInputElement>(null);
   const inFlightUploadsRef = useRef(0);
+  const isMountedRef = useRef(true);
+  const activeUploadsRef = useRef(new Map<string, UploadOperation>());
+  const callbacksRef = useRef({ onFilesChange, onFilesAdded, onUploadSuccess, onUploadError });
 
-  const markUploadStarted = useCallback(() => {
+  useEffect(() => {
+    callbacksRef.current = { onFilesChange, onFilesAdded, onUploadSuccess, onUploadError };
+  }, [onFilesAdded, onFilesChange, onUploadError, onUploadSuccess]);
+
+  useEffect(() => {
+    const activeUploads = activeUploadsRef.current;
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      activeUploads.forEach(({ controller }) => controller.abort());
+      activeUploads.clear();
+      inFlightUploadsRef.current = 0;
+    };
+  }, []);
+
+  const markUploadStarted = useCallback((fileId: string) => {
+    const operation = { controller: new AbortController() };
+    activeUploadsRef.current.set(fileId, operation);
     const nextCount = inFlightUploadsRef.current + 1;
     inFlightUploadsRef.current = nextCount;
 
     if (nextCount === 1) {
       setState((prev) => (prev.isUploadingGlobal ? prev : { ...prev, isUploadingGlobal: true }));
     }
+    return operation;
   }, []);
 
-  const markUploadFinished = useCallback(() => {
+  const markUploadFinished = useCallback((fileId: string, operation: UploadOperation) => {
+    if (activeUploadsRef.current.get(fileId) !== operation) {
+      return;
+    }
+    activeUploadsRef.current.delete(fileId);
     const nextCount = Math.max(0, inFlightUploadsRef.current - 1);
     inFlightUploadsRef.current = nextCount;
 
-    if (nextCount === 0) {
+    if (nextCount === 0 && isMountedRef.current) {
       setState((prev) => (prev.isUploadingGlobal ? { ...prev, isUploadingGlobal: false } : prev));
     }
+  }, []);
+
+  const isUploadCurrent = useCallback(
+    (fileId: string, operation: UploadOperation) =>
+      isMountedRef.current && activeUploadsRef.current.get(fileId) === operation,
+    []
+  );
+
+  const cancelUpload = useCallback((fileId: string) => {
+    const operation = activeUploadsRef.current.get(fileId);
+    if (!operation) {
+      return;
+    }
+    activeUploadsRef.current.delete(fileId);
+    inFlightUploadsRef.current = Math.max(0, inFlightUploadsRef.current - 1);
+    operation.controller.abort();
+    if (inFlightUploadsRef.current === 0 && isMountedRef.current) {
+      setState((prev) => (prev.isUploadingGlobal ? { ...prev, isUploadingGlobal: false } : prev));
+    }
+  }, []);
+
+  const cancelAllUploads = useCallback(() => {
+    const operations = Array.from(activeUploadsRef.current.values());
+    activeUploadsRef.current.clear();
+    inFlightUploadsRef.current = 0;
+    operations.forEach(({ controller }) => controller.abort());
   }, []);
 
   const validateFile = useCallback(
@@ -190,7 +245,7 @@ export const useFileUpload = (
           ),
           errors: [...prev.errors, errorMsg], // Add to general errors too
         }));
-        onUploadError?.(updatedFileWithMetaError, errorMsg);
+        callbacksRef.current.onUploadError?.(updatedFileWithMetaError, errorMsg);
         return;
       }
 
@@ -216,20 +271,25 @@ export const useFileUpload = (
           files: prev.files.map((f) => (f.id === fileWithConfigError.id ? fileWithConfigError : f)),
           errors: [...prev.errors, errorMsg],
         }));
-        onUploadError?.(fileWithConfigError, errorMsg);
+        callbacksRef.current.onUploadError?.(fileWithConfigError, errorMsg);
         return;
       }
 
       const formData = new FormData();
       formData.append('file', fileToUpload.file); // FastAPI expects 'file' field
 
-      markUploadStarted();
+      const operation = markUploadStarted(fileToUpload.id);
 
       try {
-        const response = await fetch(uploadUrl, {
+        const response = await apiFetch(uploadUrl, {
           method: 'POST',
           body: formData,
+          signal: operation.controller.signal,
         });
+
+        if (!isUploadCurrent(fileToUpload.id, operation)) {
+          return;
+        }
 
         let responseData: Record<string, unknown> = {}; // Initialize for broader scope
         const contentType = response.headers.get('content-type');
@@ -258,6 +318,10 @@ export const useFileUpload = (
           // throw new Error(`Unexpected response type: ${contentType}. Expected JSON.`);
         }
 
+        if (!isUploadCurrent(fileToUpload.id, operation)) {
+          return;
+        }
+
         const successfullyUploadedFile: FileWithPreview = {
           ...fileToUpload,
           file: {
@@ -280,10 +344,13 @@ export const useFileUpload = (
           const updatedFiles = prev.files.map((f) =>
             f.id === successfullyUploadedFile.id ? successfullyUploadedFile : f
           );
-          onUploadSuccess?.(successfullyUploadedFile, responseData);
           return { ...prev, files: updatedFiles };
         });
+        callbacksRef.current.onUploadSuccess?.(successfullyUploadedFile, responseData);
       } catch (error: unknown) {
+        if (!isUploadCurrent(fileToUpload.id, operation)) {
+          return;
+        }
         const errorMessage =
           error instanceof Error
             ? error.message
@@ -309,14 +376,14 @@ export const useFileUpload = (
           const newErrors = prev.errors.filter((e) => !e.includes(fileWithError.file.name)); // Avoid duplicate general messages for the same file
           newErrors.push(errorMessage);
 
-          onUploadError?.(fileWithError, errorMessage);
           return { ...prev, files: updatedFiles, errors: newErrors };
         });
+        callbacksRef.current.onUploadError?.(fileWithError, errorMessage);
       } finally {
-        markUploadFinished();
+        markUploadFinished(fileToUpload.id, operation);
       }
     },
-    [markUploadFinished, markUploadStarted, onUploadError, onUploadSuccess, uploadUrl]
+    [isUploadCurrent, markUploadFinished, markUploadStarted, uploadUrl]
   );
 
   const addFilesAndUpload = useCallback(
@@ -402,13 +469,16 @@ export const useFileUpload = (
           const updatedFilesState = !multiple
             ? filesToAddUpdate
             : [...prev.files, ...filesToAddUpdate];
-          onFilesChange?.(updatedFilesState); // Call with the full list
-          onFilesAdded?.(filesToAddUpdate); // Call with only the newly added valid files
           return {
             ...prev,
             files: updatedFilesState,
           };
         });
+        const updatedFilesState = !multiple
+          ? filesToAddUpdate
+          : [...state.files, ...filesToAddUpdate];
+        callbacksRef.current.onFilesChange?.(updatedFilesState);
+        callbacksRef.current.onFilesAdded?.(filesToAddUpdate);
 
         if (uploadUrl) {
           filesToAddUpdate.forEach((fileToUpload) => uploadFileInternal(fileToUpload));
@@ -454,8 +524,6 @@ export const useFileUpload = (
       validateFile,
       generateUniqueId,
       createPreview, // Other useCallback deps
-      onFilesChange,
-      onFilesAdded, // Callbacks
       uploadFileInternal,
       // setState itself is stable.
     ]
@@ -463,17 +531,21 @@ export const useFileUpload = (
 
   const removeFile = useCallback(
     (id: string) => {
+      cancelUpload(id);
+      const fileToRemove = state.files.find((file) => file.id === id);
+      if (
+        fileToRemove?.preview &&
+        fileToRemove.file instanceof File &&
+        fileToRemove.file.type.startsWith('image/')
+      ) {
+        URL.revokeObjectURL(fileToRemove.preview);
+      }
+      const newFiles = state.files.filter((file) => file.id !== id);
+      if (inputRef.current && newFiles.length === 0) {
+        inputRef.current.value = '';
+      }
       setState((prev) => {
-        const fileToRemove = prev.files.find((file) => file.id === id);
-        if (
-          fileToRemove?.preview &&
-          fileToRemove.file instanceof File &&
-          fileToRemove.file.type.startsWith('image/')
-        ) {
-          URL.revokeObjectURL(fileToRemove.preview);
-        }
-        const newFiles = prev.files.filter((file) => file.id !== id);
-        onFilesChange?.(newFiles);
+        const nextFiles = prev.files.filter((file) => file.id !== id);
 
         let updatedErrors = prev.errors;
         if (fileToRemove?.file?.name) {
@@ -481,39 +553,34 @@ export const useFileUpload = (
           updatedErrors = prev.errors.filter((err) => !err.includes(fileToRemove.file.name));
         }
         // If all files are removed, clear all errors
-        if (newFiles.length === 0) {
+        if (nextFiles.length === 0) {
           updatedErrors = [];
         }
 
-        if (inputRef.current && newFiles.length === 0) {
-          inputRef.current.value = '';
-        }
         return {
           ...prev,
-          files: newFiles,
+          files: nextFiles,
           errors: updatedErrors,
         };
       });
+      callbacksRef.current.onFilesChange?.(newFiles);
     },
-    [onFilesChange] // setState is stable
+    [cancelUpload, state.files]
   );
 
   const clearFiles = useCallback(() => {
-    inFlightUploadsRef.current = 0;
-    setState((prev) => {
-      prev.files.forEach((fwp) => {
-        if (fwp.preview && fwp.file instanceof File && fwp.file.type.startsWith('image/')) {
-          URL.revokeObjectURL(fwp.preview);
-        }
-      });
-      if (inputRef.current) {
-        inputRef.current.value = '';
+    cancelAllUploads();
+    state.files.forEach((fwp) => {
+      if (fwp.preview && fwp.file instanceof File && fwp.file.type.startsWith('image/')) {
+        URL.revokeObjectURL(fwp.preview);
       }
-      const newState = { ...prev, files: [], errors: [], isUploadingGlobal: false };
-      onFilesChange?.(newState.files);
-      return newState;
     });
-  }, [onFilesChange]); // setState is stable
+    if (inputRef.current) {
+      inputRef.current.value = '';
+    }
+    setState((prev) => ({ ...prev, files: [], errors: [], isUploadingGlobal: false }));
+    callbacksRef.current.onFilesChange?.([]);
+  }, [cancelAllUploads, state.files]);
 
   const clearErrors = useCallback(() => {
     setState((prev) => ({ ...prev, errors: [] }));

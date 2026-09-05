@@ -29,12 +29,15 @@ Refactor LLM provider configuration
 ### Frontend Testing
 
 - All contributions must pass `npm run lint`
-- Add Jest or Playwright suites beneath `apps/frontend/__tests__/`
-- Name test files `*.test.tsx`
+- Add Vitest and Testing Library suites beneath `apps/frontend/tests/`
+- Name test files `*.test.ts` or `*.test.tsx`; use Playwright for real-browser checks
 
 ```bash
 # Run linter
 npm run lint
+
+# Run frontend tests
+npm test
 
 # Format code
 npm run format

@@ -16,6 +16,7 @@ describe('api client', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -92,5 +93,85 @@ describe('api client', () => {
         vi.useRealTimers();
       }
     });
+
+    it('keeps the deadline active while the response body is pending', async () => {
+      vi.useFakeTimers();
+      let requestSignal: AbortSignal | undefined;
+      fetchMock.mockImplementationOnce((_url: string, init: RequestInit) => {
+        requestSignal = init.signal ?? undefined;
+        return Promise.resolve(
+          new Response(
+            new ReadableStream({
+              start() {
+                // Keep the body open past the request deadline.
+              },
+            }),
+            { headers: { 'content-type': 'application/json' } }
+          )
+        );
+      });
+
+      const request = apiFetch('/slow-body', undefined, 20);
+      const expectation = expect(request).rejects.toThrow(/timed out/i);
+
+      await vi.advanceTimersByTimeAsync(20);
+
+      await expectation;
+      expect(requestSignal?.aborted).toBe(true);
+    });
+
+    it('propagates caller cancellation while a response body is pending', async () => {
+      let requestSignal: AbortSignal | undefined;
+      fetchMock.mockImplementationOnce((_url: string, init: RequestInit) => {
+        requestSignal = init.signal ?? undefined;
+        return Promise.resolve(
+          new Response(
+            new ReadableStream({
+              start() {
+                // The controlled stream deliberately ignores the fetch signal.
+              },
+            })
+          )
+        );
+      });
+      const caller = new AbortController();
+      const request = apiFetch('/cancel-body', { signal: caller.signal }, 5000);
+      const expectation = expect(request).rejects.toMatchObject({ name: 'AbortError' });
+
+      caller.abort();
+
+      await expectation;
+      expect(requestSignal?.aborted).toBe(true);
+    });
+
+    it.each([
+      ['json', new Response('{"ready":true}', { headers: { 'content-type': 'application/json' } })],
+      ['blob', new Response('pdf-bytes', { headers: { 'content-type': 'application/pdf' } })],
+    ] as const)(
+      'cleans up the deadline after normal %s body completion',
+      async (reader, fixture) => {
+        vi.useFakeTimers();
+        let requestSignal: AbortSignal | undefined;
+        fetchMock.mockImplementationOnce((_url: string, init: RequestInit) => {
+          requestSignal = init.signal ?? undefined;
+          return Promise.resolve(fixture);
+        });
+        const caller = new AbortController();
+        const response = await apiFetch('/finite-body', { signal: caller.signal }, 20);
+
+        if (reader === 'json') {
+          await expect(response.json()).resolves.toEqual({ ready: true });
+        } else {
+          await expect(response.blob()).resolves.toMatchObject({
+            size: 9,
+            type: 'application/pdf',
+          });
+        }
+
+        caller.abort();
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(requestSignal?.aborted).toBe(false);
+      }
+    );
   });
 });

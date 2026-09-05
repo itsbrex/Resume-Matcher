@@ -48,6 +48,31 @@ describe('api client', () => {
     });
   });
 
+  it('preserves response origin metadata through body buffering', async () => {
+    const original = new Response('done');
+    Object.defineProperties(original, {
+      url: { value: 'https://example.com/final' },
+      redirected: { value: true },
+      type: { value: 'cors' },
+    });
+    fetchMock.mockResolvedValueOnce(original);
+    const response = await apiFetch('/redirect');
+    expect(response.url).toBe('https://example.com/final');
+    expect(response.redirected).toBe(true);
+    expect(response.type).toBe('cors');
+    expect(await response.text()).toBe('done');
+  });
+
+  it.each(['user left', new Error('user left')])(
+    'normalizes custom caller cancellation: %s',
+    async (reason) => {
+      fetchMock.mockReturnValueOnce(new Promise<Response>(() => undefined));
+      const controller = new AbortController();
+      const request = apiFetch('/cancel', { signal: controller.signal });
+      controller.abort(reason);
+      await expect(request).rejects.toMatchObject({ name: 'AbortError', cause: reason });
+    }
+  );
   describe('apiPost', () => {
     it('sends a JSON body with POST + Content-Type', async () => {
       await apiPost('/jobs/upload', { job_descriptions: ['x'] });

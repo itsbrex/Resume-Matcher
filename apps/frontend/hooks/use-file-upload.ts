@@ -93,7 +93,7 @@ export const useFileUpload = (
     uploadUrl,
   } = options;
 
-  const [state, setState] = useState<FileUploadState>({
+  const [state, setReactState] = useState<FileUploadState>({
     files: initialFiles.map((fileMeta) => ({
       // initialFiles are FileMetadata
       file: fileMeta,
@@ -104,6 +104,15 @@ export const useFileUpload = (
     errors: [],
     isUploadingGlobal: false,
   });
+
+  // Serialize actions before React batches a render. Notifications and validation
+  // consume exactly the same state as the committed update.
+  const stateRef = useRef(state);
+  const setState = useCallback((update: (previous: FileUploadState) => FileUploadState) => {
+    const next = update(stateRef.current);
+    stateRef.current = next;
+    setReactState(next);
+  }, []);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const inFlightUploadsRef = useRef(0);
@@ -388,15 +397,15 @@ export const useFileUpload = (
 
   const addFilesAndUpload = useCallback(
     (newFilesInput: FileList | File[]) => {
-      if (state.isUploadingGlobal && !multiple) return; // Don't add if already uploading (single mode)
+      if (stateRef.current.isUploadingGlobal && !multiple) return; // Don't add if already uploading (single mode)
       if (!newFilesInput || newFilesInput.length === 0) return;
 
       const newFilesArray = Array.from(newFilesInput);
       const currentValidationErrors: string[] = []; // Local to this call
 
       // For single file mode, if a file already exists (even if being uploaded or failed), replace it.
-      if (!multiple && state.files.length > 0) {
-        state.files.forEach((fwp) => {
+      if (!multiple && stateRef.current.files.length > 0) {
+        stateRef.current.files.forEach((fwp) => {
           // Revoke old preview
           if (fwp.preview && fwp.file instanceof File && fwp.file.type.startsWith('image/')) {
             URL.revokeObjectURL(fwp.preview);
@@ -417,7 +426,7 @@ export const useFileUpload = (
       if (
         multiple &&
         maxFiles !== Infinity &&
-        state.files.length + newFilesArray.length > maxFiles
+        stateRef.current.files.length + newFilesArray.length > maxFiles
       ) {
         currentValidationErrors.push(`You can only upload a maximum of ${maxFiles} files.`);
         setState((prev) => ({ ...prev, errors: [...prev.errors, ...currentValidationErrors] }));
@@ -432,9 +441,9 @@ export const useFileUpload = (
 
         // Duplicate check (more robust for multiple additions)
         const isDuplicate =
-          !multiple && state.files.length > 0
+          !multiple && stateRef.current.files.length > 0
             ? false // In single mode, we already cleared
-            : state.files.some(
+            : stateRef.current.files.some(
                 (existingFwp) =>
                   existingFwp.file.name === file.name &&
                   existingFwp.file.size === file.size &&
@@ -465,18 +474,10 @@ export const useFileUpload = (
       if (filesToProcess.length > 0) {
         const filesToAddUpdate = !multiple ? filesToProcess.slice(0, 1) : filesToProcess;
 
-        setState((prev) => {
-          const updatedFilesState = !multiple
-            ? filesToAddUpdate
-            : [...prev.files, ...filesToAddUpdate];
-          return {
-            ...prev,
-            files: updatedFilesState,
-          };
-        });
         const updatedFilesState = !multiple
           ? filesToAddUpdate
-          : [...state.files, ...filesToAddUpdate];
+          : [...stateRef.current.files, ...filesToAddUpdate];
+        setState((prev) => ({ ...prev, files: updatedFilesState }));
         callbacksRef.current.onFilesChange?.(updatedFilesState);
         callbacksRef.current.onFilesAdded?.(filesToAddUpdate);
 
@@ -516,8 +517,6 @@ export const useFileUpload = (
       }
     },
     [
-      state.isUploadingGlobal,
-      state.files, // Critical for logic within
       multiple,
       maxFiles,
       uploadUrl,
@@ -532,7 +531,7 @@ export const useFileUpload = (
   const removeFile = useCallback(
     (id: string) => {
       cancelUpload(id);
-      const fileToRemove = state.files.find((file) => file.id === id);
+      const fileToRemove = stateRef.current.files.find((file) => file.id === id);
       if (
         fileToRemove?.preview &&
         fileToRemove.file instanceof File &&
@@ -540,7 +539,7 @@ export const useFileUpload = (
       ) {
         URL.revokeObjectURL(fileToRemove.preview);
       }
-      const newFiles = state.files.filter((file) => file.id !== id);
+      const newFiles = stateRef.current.files.filter((file) => file.id !== id);
       if (inputRef.current && newFiles.length === 0) {
         inputRef.current.value = '';
       }
@@ -565,12 +564,12 @@ export const useFileUpload = (
       });
       callbacksRef.current.onFilesChange?.(newFiles);
     },
-    [cancelUpload, state.files]
+    [cancelUpload, setState]
   );
 
   const clearFiles = useCallback(() => {
     cancelAllUploads();
-    state.files.forEach((fwp) => {
+    stateRef.current.files.forEach((fwp) => {
       if (fwp.preview && fwp.file instanceof File && fwp.file.type.startsWith('image/')) {
         URL.revokeObjectURL(fwp.preview);
       }
@@ -580,7 +579,7 @@ export const useFileUpload = (
     }
     setState((prev) => ({ ...prev, files: [], errors: [], isUploadingGlobal: false }));
     callbacksRef.current.onFilesChange?.([]);
-  }, [cancelAllUploads, state.files]);
+  }, [cancelAllUploads, setState]);
 
   const clearErrors = useCallback(() => {
     setState((prev) => ({ ...prev, errors: [] }));

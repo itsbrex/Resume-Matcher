@@ -236,3 +236,27 @@ describe('useFileUpload request lifecycle', () => {
     expect(onUploadError).not.toHaveBeenCalled();
   });
 });
+
+it('serializes batched add/remove callbacks and enforces capacity before rerender', () => {
+  vi.stubGlobal('fetch', vi.fn().mockReturnValue(new Promise<Response>(() => undefined)));
+  const changes = vi.fn();
+  const { result } = renderHook(() =>
+    useFileUpload({ multiple: true, maxFiles: 2, uploadUrl: '/upload', onFilesChange: changes })
+  );
+  act(() => {
+    result.current[1].addFiles([resumeFile('a.pdf')]);
+    result.current[1].addFiles([resumeFile('b.pdf')]);
+    result.current[1].addFiles([resumeFile('c.pdf')]);
+  });
+  expect(result.current[0].files.map((f) => f.file.name)).toEqual(['a.pdf', 'b.pdf']);
+  expect(changes.mock.calls[1][0].map((f: { file: File }) => f.file.name)).toEqual([
+    'a.pdf',
+    'b.pdf',
+  ]);
+  const [a, b] = result.current[0].files;
+  act(() => {
+    result.current[1].removeFile(a.id);
+    result.current[1].removeFile(b.id);
+  });
+  expect(changes.mock.lastCall?.[0]).toEqual([]);
+});

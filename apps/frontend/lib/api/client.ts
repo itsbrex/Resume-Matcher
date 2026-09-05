@@ -49,24 +49,29 @@ function createTimeoutError(): Error {
   return new Error(REQUEST_TIMEOUT_MESSAGE);
 }
 
-function createAbortError(reason: unknown): unknown {
-  if (reason !== undefined) {
-    return reason;
-  }
-  return new DOMException('The operation was aborted.', 'AbortError');
+function createAbortError(reason: unknown): Error {
+  const error = new Error('The operation was aborted.', { cause: reason });
+  error.name = 'AbortError';
+  return error;
 }
 
 async function bufferResponse(response: Response): Promise<Response> {
-  if (response.body === null) {
+  if (response.body === null || response.status < 200 || response.status > 599) {
     return response;
   }
 
   const body = await response.arrayBuffer();
-  return new Response(body, {
+  const buffered = new Response(body, {
     status: response.status,
     statusText: response.statusText,
     headers: response.headers,
   });
+  Object.defineProperties(buffered, {
+    url: { value: response.url },
+    redirected: { value: response.redirected },
+    type: { value: response.type },
+  });
+  return buffered;
 }
 
 /**

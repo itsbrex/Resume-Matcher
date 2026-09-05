@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { flushSync } from 'react-dom';
+import { retryProcessing } from '@/lib/api/resume';
 import { ResumeUploadDialog } from '@/components/dashboard/resume-upload-dialog';
 
 vi.mock('@/lib/i18n', () => ({
@@ -71,11 +73,9 @@ describe('ResumeUploadDialog upload propagation', () => {
     );
 
     chooseResume();
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(screen.getByText('dashboard.uploadDialog.successMaster')).toBeInTheDocument();
+    await vi.waitFor(() =>
+      expect(screen.getByText('dashboard.uploadDialog.successMaster')).toBeInTheDocument()
+    );
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1500);
@@ -115,11 +115,9 @@ describe('ResumeUploadDialog upload propagation', () => {
     );
 
     chooseResume();
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(screen.getByText('dashboard.uploadDialog.successMaster')).toBeInTheDocument();
+    await vi.waitFor(() =>
+      expect(screen.getByText('dashboard.uploadDialog.successMaster')).toBeInTheDocument()
+    );
 
     view.unmount();
     await vi.advanceTimersByTimeAsync(1500);
@@ -127,4 +125,75 @@ describe('ResumeUploadDialog upload propagation', () => {
     expect(onUploadComplete).toHaveBeenCalledTimes(1);
     expect(onOpenChange).not.toHaveBeenCalled();
   });
+});
+
+it('keeps a second upload open beyond the previous success timer', async () => {
+  vi.mocked(fetch)
+    .mockResolvedValueOnce(uploadResponse('first'))
+    .mockReturnValueOnce(new Promise<Response>(() => undefined));
+  const onComplete = vi.fn();
+  render(<ControlledDialog onUploadComplete={onComplete} />);
+  vi.useFakeTimers();
+  chooseResume();
+  await vi.waitFor(() =>
+    expect(screen.getByText('dashboard.uploadDialog.successMaster')).toBeInTheDocument()
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'a11y.removeFile' }));
+  chooseResume('second.pdf');
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1600);
+  });
+  expect(screen.getByRole('dialog')).toBeInTheDocument();
+  expect(screen.getByText('common.uploading')).toBeInTheDocument();
+});
+
+it('does not retain a close timer when the success callback synchronously unmounts', async () => {
+  vi.mocked(fetch).mockResolvedValueOnce(uploadResponse('first'));
+  const onOpenChange = vi.fn();
+  let unmount = () => {};
+  const view = render(
+    <ResumeUploadDialog
+      open
+      onOpenChange={onOpenChange}
+      onUploadComplete={() => flushSync(unmount)}
+    />
+  );
+  unmount = view.unmount;
+  vi.useFakeTimers();
+  chooseResume();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1600);
+  });
+  expect(onOpenChange).not.toHaveBeenCalled();
+});
+
+it('discards a processing retry after close and allows a new upload immediately', async () => {
+  const retry = deferred<Awaited<ReturnType<typeof retryProcessing>>>();
+  vi.mocked(retryProcessing).mockReturnValueOnce(retry.promise);
+  vi.mocked(fetch).mockResolvedValueOnce(
+    new Response(JSON.stringify({ resume_id: 'failed', processing_status: 'failed' }), {
+      headers: { 'content-type': 'application/json' },
+    })
+  );
+  const onComplete = vi.fn();
+  render(<ControlledDialog onUploadComplete={onComplete} />);
+  chooseResume();
+  fireEvent.click(await screen.findByRole('button', { name: 'dashboard.retryProcessing' }));
+  fireEvent.click(screen.getByRole('button', { name: 'common.cancel' }));
+  fireEvent.click(screen.getByRole('button', { name: 'reopen upload' }));
+  await act(async () =>
+    retry.resolve({
+      resume_id: 'failed',
+      processing_status: 'ready',
+      message: 'ready',
+      request_id: 'synthetic-request',
+      is_master: true,
+    })
+  );
+  expect(onComplete).not.toHaveBeenCalled();
+  expect(screen.getByRole('dialog')).toBeInTheDocument();
+  expect(document.querySelector('input[type="file"]')).not.toBeDisabled();
 });

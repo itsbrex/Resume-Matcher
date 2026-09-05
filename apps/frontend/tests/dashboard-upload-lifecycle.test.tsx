@@ -84,7 +84,7 @@ afterEach(() => {
 });
 
 describe.each(['normal', 'StrictMode'] as const)('dashboard upload propagation (%s)', (mode) => {
-  it('increments the real status cache once and closes the upload after one success', async () => {
+  it('increments the real status cache once and replaces the upload with the master card', async () => {
     const app = (
       <StatusCacheProvider>
         <Counters />
@@ -111,9 +111,6 @@ describe.each(['normal', 'StrictMode'] as const)('dashboard upload propagation (
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('counters')).toHaveTextContent('1:true');
     expect(localStorage.getItem('master_resume_id')).toBe('resume-1');
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(3000);
-    });
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(screen.getByTestId('counters')).toHaveTextContent('1:true');
   });

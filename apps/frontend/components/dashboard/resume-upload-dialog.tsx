@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -51,6 +51,8 @@ export function ResumeUploadDialog({
   } | null>(null);
   const [failedResumeId, setFailedResumeId] = useState<string | null>(null);
   const [isRetryingProcessing, setIsRetryingProcessing] = useState(false);
+  const retryOwnerRef = useRef(0);
+  const retryBusyRef = useRef(false);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isControlled = controlledOpen !== undefined;
   const isOpen = isControlled ? controlledOpen : internalOpen;
@@ -70,7 +72,14 @@ export function ResumeUploadDialog({
     }
   }, []);
 
-  useEffect(() => clearScheduledClose, [clearScheduledClose]);
+  useLayoutEffect(
+    () => () => {
+      retryOwnerRef.current += 1;
+      retryBusyRef.current = false;
+      clearScheduledClose();
+    },
+    [clearScheduledClose]
+  );
 
   const handleUploadSuccess = ({
     resumeId,
@@ -83,7 +92,6 @@ export function ResumeUploadDialog({
   }) => {
     setUploadFeedback({ type: 'success', message });
     setFailedResumeId(null);
-    onUploadComplete?.(resumeId);
 
     // Close dialog after a short delay to show success state
     clearScheduledClose();
@@ -96,6 +104,7 @@ export function ResumeUploadDialog({
         removeFile(fileId); // Clear file for next time
       }
     }, 1500);
+    onUploadComplete?.(resumeId);
   };
 
   const [
@@ -156,6 +165,7 @@ export function ResumeUploadDialog({
       });
     },
     onFilesChange: (currentFiles) => {
+      clearScheduledClose();
       if (currentFiles.length === 0) {
         setUploadFeedback(null);
         setFailedResumeId(null);
@@ -170,8 +180,11 @@ export function ResumeUploadDialog({
     clearFilesRef.current = clearFiles;
   }, [clearFiles]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (wasOpenRef.current && !isOpen) {
+      retryOwnerRef.current += 1;
+      retryBusyRef.current = false;
+      setIsRetryingProcessing(false);
       clearScheduledClose();
       clearFilesRef.current();
       setUploadFeedback(null);
@@ -188,12 +201,15 @@ export function ResumeUploadDialog({
   };
 
   const handleRetryProcessing = async () => {
-    if (!failedResumeId) return;
+    if (!failedResumeId || retryBusyRef.current) return;
+    const owner = ++retryOwnerRef.current;
+    retryBusyRef.current = true;
     const resumeIdToRetry = failedResumeId;
     const fileIdToRemove = currentFile?.id;
     setIsRetryingProcessing(true);
     try {
       const result = await retryProcessing(resumeIdToRetry);
+      if (owner !== retryOwnerRef.current) return;
       if (result.processing_status !== 'ready') {
         setUploadFeedback({ type: 'error', message: t('dashboard.retryFailed') });
         return;
@@ -205,10 +221,14 @@ export function ResumeUploadDialog({
         message: t('dashboard.retrySuccess'),
       });
     } catch (err) {
+      if (owner !== retryOwnerRef.current) return;
       console.error('Retry processing failed:', err);
       setUploadFeedback({ type: 'error', message: t('dashboard.retryFailed') });
     } finally {
-      setIsRetryingProcessing(false);
+      if (owner === retryOwnerRef.current) {
+        retryBusyRef.current = false;
+        setIsRetryingProcessing(false);
+      }
     }
   };
 

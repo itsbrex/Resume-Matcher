@@ -270,7 +270,13 @@ def _merge_description_rows(
         )
     if allow_appended_rows:
         for candidate_row in candidate_list[len(source_rows) :]:
-            if _novel_numbers(source_text, candidate_row):
+            match = _best_source_row(
+                candidate_row, source_rows, set(range(len(source_rows)))
+            )
+            grounded = match is not None and match[1] >= _GROUNDING_REVIEW_THRESHOLD
+            if _novel_numbers(source_text, candidate_row) or (
+                not allow_review_claims and not grounded
+            ):
                 continue
             merged_rows.append(candidate_row)
             merged_styles.append("bullet")

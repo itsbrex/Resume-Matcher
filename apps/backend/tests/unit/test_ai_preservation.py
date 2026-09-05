@@ -447,6 +447,25 @@ def test_verified_append_can_survive_finalization() -> None:
     )
 
 
+def test_direct_flow_drops_unreviewed_ungrounded_append() -> None:
+    source = _source_resume()
+    candidate = copy.deepcopy(source)
+    candidate["workExperience"][0]["description"].append(
+        "Commanded unrelated lunar expeditions"
+    )
+
+    finalized = finalize_ai_resume(
+        source,
+        candidate,
+        allow_review_claims=False,
+        allow_appended_rows=True,
+    )
+
+    assert finalized["workExperience"][0]["description"] == source["workExperience"][0][
+        "description"
+    ]
+
+
 def test_education_without_source_narrative_rejects_candidate_narrative() -> None:
     source = _source_resume()
     source["education"][0]["description"] = None

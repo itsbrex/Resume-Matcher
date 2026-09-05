@@ -278,6 +278,7 @@ async def test_restored_unsafe_writer_attempt_is_not_counted_as_applied() -> Non
         )
 
     assert writer.await_count == 1
+    assert result.passes_attempted == 1
     assert result.passes_completed == 0
     assert result.refined_data == source
 

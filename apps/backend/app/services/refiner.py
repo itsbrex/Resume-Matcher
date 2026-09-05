@@ -98,6 +98,8 @@ async def refine_resume(
 
     current = _deep_copy(initial_tailored)
     passes = 0
+    attempts = 0
+    alignment_fixed = 0
     ai_phrases_found: list[str] = []
     keyword_analysis: KeywordGapAnalysis | None = None
     alignment: AlignmentReport | None = None
@@ -111,6 +113,7 @@ async def refine_resume(
                 len(keyword_analysis.injectable_keywords),
                 keyword_analysis.injectable_keywords,
             )
+            attempts += 1
             before = _deep_copy(current)
             try:
                 candidate = await inject_keywords(
@@ -133,15 +136,18 @@ async def refine_resume(
 
     # Pass 2: AI phrase removal and polish (local, no LLM call)
     if config.enable_ai_phrase_removal:
+        attempts += 1
+        before = _deep_copy(current)
         current, removed = remove_ai_phrases(current, job_description)
         ai_phrases_found.extend(removed)
-        if removed:
+        if current != before:
             logger.info("Removed %d AI phrases: %s", len(removed), removed)
             passes += 1
 
     # Pass 3: Master alignment validation
     # LLM-008: Alignment validation is MANDATORY - not optional fallback
     if config.enable_master_alignment_check:
+        attempts += 1
         alignment = validate_master_alignment(
             current,
             master_resume,
@@ -161,19 +167,26 @@ async def refine_resume(
                 len(critical_violations),
             )
 
-            if critical_violations:
-                # LLM-008: Remove fabricated content before returning
-                logger.error(
-                    "Alignment violations found - removing fabricated content: %s",
-                    [v.value for v in critical_violations],
-                )
-                # Fix violations before returning
-                current = fix_alignment_violations(current, alignment.violations)
+            before = _deep_copy(current)
+            current = fix_alignment_violations(current, alignment.violations)
+            if current != before:
                 passes += 1
-            else:
-                # Non-critical violations - fix and continue
-                current = fix_alignment_violations(current, alignment.violations)
-                passes += 1
+            after = validate_master_alignment(
+                current,
+                master_resume,
+                allowed_new_skills=_extract_jd_skill_keys(
+                    job_keywords, job_description
+                ),
+            )
+            remaining = {
+                (v.field_path, v.violation_type, v.value)
+                for v in after.violations
+                if v.severity == "critical"
+            }
+            alignment_fixed = sum(
+                (v.field_path, v.violation_type, v.value) not in remaining
+                for v in critical_violations
+            )
 
     # Calculate final match percentage
     final_match = calculate_keyword_match(current, job_keywords)
@@ -181,6 +194,15 @@ async def refine_resume(
     return RefinementResult(
         refined_data=current,
         passes_completed=passes,
+        passes_attempted=attempts,
+        keywords_applied=[
+            keyword
+            for keyword in (
+                keyword_analysis.injectable_keywords if keyword_analysis else []
+            )
+            if _keyword_in_text(keyword, _extract_all_text(current))
+        ],
+        alignment_violations_fixed=alignment_fixed,
         keyword_analysis=keyword_analysis,
         alignment_report=alignment,
         ai_phrases_removed=ai_phrases_found,

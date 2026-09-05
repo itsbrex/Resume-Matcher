@@ -126,13 +126,8 @@ class TestIsValidResume:
     def test_well_formed_resume_is_valid(self, sample_resume):
         assert is_valid_resume(sample_resume) is True
 
-    def test_empty_dict_is_valid_due_to_defaults(self):
-        # Canary: every ResumeData field currently has a default, so {} validates
-        # as an empty resume. If a future schema change makes a field REQUIRED
-        # (no default), is_valid_resume({}) flips to False and this test fails
-        # LOUDLY — by design — flagging that the scorers' "empty is valid"
-        # assumption no longer holds.
-        assert is_valid_resume({}) is True
+    def test_empty_dict_is_not_meaningful_despite_schema_defaults(self) -> None:
+        assert is_valid_resume({}) is False
 
     def test_wrong_type_for_work_experience_is_invalid(self, sample_resume):
         broken = copy.deepcopy(sample_resume)
@@ -189,7 +184,7 @@ class TestGoldenCasesStructural:
         assert sections_preserved(original, good) is True
         assert no_fabricated_employers(original, good) == []
         assert personal_info_unchanged(original, good) is True
-        assert jd_keywords_present(good, case["jd_keywords"]) == 1.0
+        assert jd_keywords_present(good, case["grounded_keywords"]) == 1.0
 
     @pytest.mark.parametrize("case", GOLDEN_CASES, ids=lambda c: c["name"])
     def test_bad_tailoring_is_caught(self, case):

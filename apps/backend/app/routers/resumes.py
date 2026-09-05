@@ -1018,7 +1018,7 @@ async def improve_resume_preview_endpoint(
     language = get_content_language()
     prompt_id = request.prompt_id or _get_default_prompt_id()
 
-    stage = "load_job_keywords"
+    progress = {"stage": "load_job_keywords"}
     detail = "Failed to preview resume. Please try again."
     try:
         return await asyncio.wait_for(
@@ -1028,14 +1028,19 @@ async def improve_resume_preview_endpoint(
                 job=job,
                 language=language,
                 prompt_id=prompt_id,
+                progress=progress,
             ),
             timeout=remaining_timeout(),
         )
     except PreviewConflictError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
+    except asyncio.CancelledError:
+        logger.info("Improve preview cancelled at stage=%s", progress["stage"])
+        raise
     except asyncio.TimeoutError:
         logger.error(
-            "Improve preview timed out after %ss for resume %s / job %s",
+            "Improve preview timed out at stage=%s after %ss for resume %s / job %s",
+            progress["stage"],
             settings.request_timeout_seconds,
             request.resume_id,
             request.job_id,
@@ -1052,7 +1057,7 @@ async def improve_resume_preview_endpoint(
     except DatabaseBusyError:
         raise
     except Exception as e:
-        _raise_improve_error("preview", stage, e, detail)
+        _raise_improve_error("preview", progress["stage"], e, detail)
 
 
 async def _improve_preview_flow(
@@ -1062,8 +1067,12 @@ async def _improve_preview_flow(
     job: dict[str, Any],
     language: str,
     prompt_id: str,
+    progress: dict[str, str] | None = None,
 ) -> ImproveResumeResponse:
     """Inner flow for improve/preview, extracted so it can be wrapped in wait_for."""
+    if progress is None:
+        progress = {}
+    progress["stage"] = "load_job_keywords"
     job_keywords = job.get("job_keywords")
     job_keywords_hash = job.get("job_keywords_hash")
     content_hash = _hash_job_content(job["content"])
@@ -1101,6 +1110,7 @@ async def _improve_preview_flow(
                 request.job_id,
                 e,
             )
+    progress["stage"] = "load_original_resume"
     original_resume_data = _get_original_resume_data(resume)
     # Collect warnings throughout the process
     response_warnings: list[str] = []
@@ -1110,6 +1120,7 @@ async def _improve_preview_flow(
     if original_resume_data:
         skill_targets: list[dict[str, Any]] = []
         try:
+            progress["stage"] = "plan_skill_targets"
             raw_skill_plan = await generate_skill_target_plan(
                 original_resume_data=original_resume_data,
                 job_description=job["content"],
@@ -1136,6 +1147,7 @@ async def _improve_preview_flow(
             logger.warning("Skill target planning failed, continuing without it: %s", e)
             response_warnings.append("Skill target planning failed")
 
+        progress["stage"] = "generate_resume_diffs"
         diff_result = await generate_resume_diffs(
             original_resume=resume["content"],
             job_description=job["content"],
@@ -1146,6 +1158,7 @@ async def _improve_preview_flow(
             skill_targets=skill_targets,
         )
 
+        progress["stage"] = "apply_resume_diffs"
         improved_data, applied_changes, rejected_changes = apply_diffs(
             original=original_resume_data,
             changes=diff_result.changes,
@@ -1177,6 +1190,7 @@ async def _improve_preview_flow(
         )
     else:
         # Fallback to full-output mode when no structured data available
+        progress["stage"] = "generate_resume"
         improved_data = await improve_resume(
             original_resume=resume["content"],
             job_description=job["content"],
@@ -1186,6 +1200,7 @@ async def _improve_preview_flow(
             original_resume_data=original_resume_data,
         )
 
+    progress["stage"] = "preserve_source_fields"
     # Safety nets (defense in depth — should rarely activate with diff-based flow)
     improved_data, preserve_warnings = _preserve_personal_info(
         original_resume_data,
@@ -1216,6 +1231,7 @@ async def _improve_preview_flow(
         if master_data:
             initial_match = calculate_keyword_match(improved_data, job_keywords)
             refinement_attempted = True
+            progress["stage"] = "refine_resume"
             refinement_result = await refine_resume(
                 initial_tailored=improved_data,
                 master_resume=master_data,
@@ -1224,28 +1240,7 @@ async def _improve_preview_flow(
                 config=RefinementConfig(),
             )
             improved_data = refinement_result.refined_data
-            refinement_stats = RefinementStats(
-                passes_completed=refinement_result.passes_completed,
-                keywords_injected=(
-                    len(refinement_result.keyword_analysis.injectable_keywords)
-                    if refinement_result.keyword_analysis
-                    else 0
-                ),
-                ai_phrases_removed=refinement_result.ai_phrases_removed,
-                alignment_violations_fixed=(
-                    len(
-                        [
-                            v
-                            for v in refinement_result.alignment_report.violations
-                            if v.severity == "critical"
-                        ]
-                    )
-                    if refinement_result.alignment_report
-                    else 0
-                ),
-                initial_match_percentage=initial_match,
-                final_match_percentage=refinement_result.final_match_percentage,
-            )
+            refinement_stats = refinement_result.to_stats(initial_match)
             refinement_successful = True
             logger.info(
                 "Refinement completed: %d passes, %d AI phrases removed",
@@ -1267,6 +1262,7 @@ async def _improve_preview_flow(
             grounding_review_warnings(original_resume_data, improved_data)
         )
 
+    progress["stage"] = "register_preview"
     improved_text = json.dumps(improved_data, indent=2)
     preview_hash = _hash_improved_data(improved_data)
     improvements = generate_improvements(job_keywords)
@@ -1284,6 +1280,7 @@ async def _improve_preview_flow(
         ttl_seconds=settings.preview_ttl_seconds,
         improvements=improvements,
     )
+    progress["stage"] = "calculate_diff"
     diff_summary, detailed_changes, diff_error = _calculate_diff_from_resume(
         resume,
         improved_data,
@@ -1292,6 +1289,7 @@ async def _improve_preview_flow(
         response_warnings.append(DIFF_UNAVAILABLE_WARNING)
 
     request_id = str(uuid4())
+    progress["stage"] = "serialize_preview"
     return ImproveResumeResponse(
         request_id=request_id,
         data=ImproveResumeData(
@@ -1621,28 +1619,7 @@ async def improve_resume_endpoint(
                     config=RefinementConfig(),
                 )
                 improved_data = refinement_result.refined_data
-                refinement_stats = RefinementStats(
-                    passes_completed=refinement_result.passes_completed,
-                    keywords_injected=(
-                        len(refinement_result.keyword_analysis.injectable_keywords)
-                        if refinement_result.keyword_analysis
-                        else 0
-                    ),
-                    ai_phrases_removed=refinement_result.ai_phrases_removed,
-                    alignment_violations_fixed=(
-                        len(
-                            [
-                                v
-                                for v in refinement_result.alignment_report.violations
-                                if v.severity == "critical"
-                            ]
-                        )
-                        if refinement_result.alignment_report
-                        else 0
-                    ),
-                    initial_match_percentage=initial_match,
-                    final_match_percentage=refinement_result.final_match_percentage,
-                )
+                refinement_stats = refinement_result.to_stats(initial_match)
                 refinement_successful = True
                 logger.info(
                     "Refinement completed: %d passes, %d AI phrases removed",

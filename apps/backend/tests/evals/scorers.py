@@ -22,11 +22,13 @@ function). The LLM-as-judge layer lives separately in
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from pydantic import ValidationError
 
 from app.schemas import ResumeData
+from app.services.parser import has_meaningful_resume_content
 
 # Top-level resume sections whose presence we care about. ``workExperience``
 # and ``education`` are the load-bearing ones a tailoring must never drop.
@@ -111,6 +113,29 @@ def sections_preserved(original: dict, tailored: dict) -> bool:
             tailored.get(section)
         ):
             return False
+    original_custom = original.get("customSections") or {}
+    tailored_custom = tailored.get("customSections") or {}
+    if isinstance(original_custom, dict):
+        for key, section in original_custom.items():
+            if not isinstance(section, dict):
+                continue
+            # Labels/types alone are not retained section content.
+            content = {
+                field: section.get(field) for field in ("text", "strings", "items")
+            }
+            replacement = (
+                tailored_custom.get(key) if isinstance(tailored_custom, dict) else None
+            )
+            if _is_nonempty(content) and (
+                not isinstance(replacement, dict)
+                or not _is_nonempty(
+                    {
+                        field: replacement.get(field)
+                        for field in ("text", "strings", "items")
+                    }
+                )
+            ):
+                return False
     return True
 
 
@@ -138,24 +163,29 @@ def no_fabricated_employers(original: dict, tailored: dict) -> list[str]:
 def jd_keywords_present(tailored: dict, keywords: list[str]) -> float:
     """Fraction (0.0–1.0) of ``keywords`` that appear in the tailored resume.
 
-    Matching is case-insensitive substring search over the flattened resume
+    Matching is case-insensitive whole-term search over the flattened resume
     text. With an empty ``keywords`` list there is nothing to miss, so the
     score is 1.0.
     """
     if not keywords:
         return 1.0
     haystack = flatten_resume_text(tailored)
-    hits = sum(1 for kw in keywords if kw and kw.lower() in haystack)
+    hits = sum(
+        1
+        for kw in keywords
+        if kw.strip()
+        and re.search(rf"(?<!\w){re.escape(kw.strip().lower())}(?!\w)", haystack)
+    )
     return hits / len(keywords)
 
 
 def is_valid_resume(data: dict) -> bool:
-    """Return True iff ``data`` validates against the ``ResumeData`` schema."""
+    """Require both valid schema and meaningful resume content."""
     try:
-        ResumeData.model_validate(data)
+        parsed = ResumeData.model_validate(data)
     except ValidationError:
         return False
-    return True
+    return has_meaningful_resume_content(parsed.model_dump())
 
 
 def personal_info_unchanged(original: dict, tailored: dict) -> bool:

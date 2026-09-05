@@ -158,3 +158,9 @@ import { fetchResume, API_BASE, PROVIDER_INFO } from '@/lib/api';
 ```
 
 Legacy `.doc` files pass compound-file header validation, but the bundled MarkItDown DOCX converter does not guarantee binary Word conversion. Convert legacy Word documents to PDF or DOCX for reliable upload.
+
+## Refinement and monitoring statistics
+
+`refinement_stats.passes_attempted` counts attempted refinement stages. `passes_completed` counts stages that changed content; a failed or unchanged keyword injection no longer counts as completed. `keywords_eligible` counts missing source-supported candidates before injection, while `keywords_injected` counts those actually present in the final result. `alignment_violations_fixed` counts critical violations resolved by the local correction pass. Preview and legacy improve responses share the same statistics model and conversion.
+
+Preview error logs identify the stage actually running, including cancellation and timeout. Client messages keep the existing generic error boundary. The opt-in monitor records monotonic elapsed milliseconds and explicit skipped/error/cancelled outcomes; see its [run and isolation contract](../../../apps/backend/e2e_monitor/README.md). These counters and heuristic scores do not claim commercial ATS accuracy.

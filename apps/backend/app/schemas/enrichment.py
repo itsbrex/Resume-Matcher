@@ -59,10 +59,21 @@ class EnhancedDescription(BaseModel):
     enhanced_description: list[str] = Field(default_factory=list)
 
 
+class EnhancementItemError(BaseModel):
+    """A safe, non-fatal error for one requested enhancement item."""
+
+    item_id: str
+    item_type: str
+    title: str
+    subtitle: str | None = None
+    message: str
+
+
 class EnhancementPreview(BaseModel):
     """Preview of all enhancements before applying."""
 
     enhancements: list[EnhancedDescription] = Field(default_factory=list)
+    errors: list[EnhancementItemError] = Field(default_factory=list)
 
 
 class ApplyEnhancementsRequest(BaseModel):

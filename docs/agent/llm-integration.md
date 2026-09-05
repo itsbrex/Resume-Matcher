@@ -44,8 +44,26 @@ The `complete_json()` function automatically enables `response_format={"type": "
 
 ## Retry Logic
 
-JSON completions include up to 2 automatic content retries with increasing
-temperature for response variation when the model supports sampling:
+LiteLLM's Router owns transport retries. The effective policy on the installed
+LiteLLM 1.86.2 stack is:
+
+| Error class | Transport retries | Maximum provider calls |
+|-------------|-------------------|------------------------|
+| Authentication, bad request, content policy | 0 | 1 |
+| Timeout | 2 | 3 |
+| Internal server | 2 | 3 |
+| Rate limit | 3 | 4 |
+
+The internal-server rule uses the Router's exception-local retry override
+because LiteLLM 1.86.2 exposes the setting but omits that class from its policy
+dispatcher. These counts describe bounded attempts; they do not measure
+provider backoff, latency, or cost. Caller cancellation is propagated.
+
+After a transport request returns, JSON completions include up to 2 automatic
+content retries for malformed, empty, truncated, or schema-invalid responses.
+An exhausted transport error escapes immediately and does not start a content
+retry. Content retries increase temperature for response variation when the
+model supports sampling:
 
 - Initial attempt: temperature 0.1
 - First retry: temperature 0.3
@@ -110,8 +128,25 @@ Robust bracket-matching algorithm in `_extract_json()` handles:
 
 - Malformed responses
 - Markdown code blocks
+- Rejection of top-level arrays when an object is required
 - Edge cases
 - Infinite recursion protection when content starts with `{` but matching fails
+
+Callers can pass a synchronous `response_validator` to `complete_json()`. The
+validator runs inside the content retry budget, so a schema-valid JSON object
+with missing task fields is retried like malformed JSON. Service validators
+also run after the wrapper boundary to protect mocked or alternate completion
+implementations. Empty lists remain valid for contracts where they have a
+defined meaning, such as zero diffs or a sparse resume. Enhancement and
+regeneration replacements require non-empty lists of non-blank strings.
+
+## Optional generated text
+
+Plain completions reject whitespace-only output. Resume confirmation still
+saves the tailored resume if title, cover letter, outreach, or interview prep
+generation fails, and records a warning for each missing attachment. Cover
+letter, outreach, and title generation reject job descriptions longer than
+100,000 characters before calling a provider.
 
 ## Error Handling Pattern
 

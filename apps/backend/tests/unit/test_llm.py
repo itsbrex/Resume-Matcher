@@ -411,34 +411,34 @@ class TestAppearsTruncated:
     # --- resume schema ---
 
     def test_resume_empty_work_experience(self):
-        """Empty workExperience array in resume structure is suspicious."""
+        """A candidate can legitimately have no work experience."""
         data = {
             "personalInfo": {"name": "John"},
             "workExperience": [],
             "education": [{"degree": "BS"}],
             "skills": ["Python"],
         }
-        assert _appears_truncated(data, schema_type="resume") is True
+        assert _appears_truncated(data, schema_type="resume") is False
 
     def test_resume_empty_education(self):
-        """Empty education array in resume structure is suspicious."""
+        """A candidate can legitimately omit education entries."""
         data = {
             "personalInfo": {"name": "John"},
             "workExperience": [{"title": "Dev"}],
             "education": [],
             "skills": ["Python"],
         }
-        assert _appears_truncated(data, schema_type="resume") is True
+        assert _appears_truncated(data, schema_type="resume") is False
 
     def test_resume_empty_skills(self):
-        """Empty skills array in resume structure is suspicious."""
+        """An empty optional skill list is schema-valid."""
         data = {
             "personalInfo": {"name": "John"},
             "workExperience": [{"title": "Dev"}],
             "education": [{"degree": "BS"}],
             "skills": [],
         }
-        assert _appears_truncated(data, schema_type="resume") is True
+        assert _appears_truncated(data, schema_type="resume") is False
 
     def test_resume_valid(self):
         """Well-formed resume with all sections present is not truncated."""
@@ -506,9 +506,9 @@ class TestAppearsTruncated:
     # --- default / unknown schema ---
 
     def test_default_schema_acts_like_resume(self):
-        """Default schema_type behaves like 'resume' for backwards compatibility."""
+        """Default resume handling leaves usefulness to its caller validator."""
         data = {"workExperience": [], "education": [{"degree": "BS"}]}
-        assert _appears_truncated(data) is True
+        assert _appears_truncated(data) is False
 
     def test_unknown_schema_no_heuristics(self):
         """Unknown schema types have no truncation heuristics."""

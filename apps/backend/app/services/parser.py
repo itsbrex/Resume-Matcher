@@ -686,6 +686,14 @@ def _parse_document_sync(content: bytes, filename: str) -> str:
             tmp_path.unlink(missing_ok=True)
 
 
+def _validate_parsed_resume(result: dict[str, Any]) -> dict[str, Any]:
+    """Validate that parsed output is a schema-valid, non-empty resume."""
+    parsed_data = ResumeData.model_validate(result).model_dump()
+    if not has_meaningful_resume_content(parsed_data):
+        raise ValueError("LLM returned an empty structured resume.")
+    return parsed_data
+
+
 async def parse_document(content: bytes, filename: str) -> str:
     """Convert a bounded PDF/DOC/DOCX without blocking the request event loop.
 
@@ -756,14 +764,11 @@ async def parse_resume_to_json(markdown_text: str) -> dict[str, Any]:
         system_prompt="You are a JSON extraction engine. Output only valid JSON, no explanations.",
         max_tokens=get_safe_max_tokens(model_name, config=config),
         retries=3,
+        response_validator=_validate_parsed_resume,
     )
 
     # Patch dates: restore months the LLM may have dropped
     result = restore_dates_from_markdown(result, markdown_text)
 
     # Validate against schema
-    validated = ResumeData.model_validate(result)
-    parsed_data = validated.model_dump()
-    if not has_meaningful_resume_content(parsed_data):
-        raise ValueError("LLM returned an empty structured resume.")
-    return parsed_data
+    return _validate_parsed_resume(result)

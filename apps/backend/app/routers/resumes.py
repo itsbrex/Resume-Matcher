@@ -622,15 +622,22 @@ async def _generate_auxiliary_messages(
                 result,
                 exc_info=result,
             )
-            if label != "title":
-                warnings.append(f"{label.replace('_', ' ').title()} generation failed")
+            warnings.append(f"{label.replace('_', ' ').title()} generation failed")
         else:
+            if label != "interview_prep" and (
+                not isinstance(result, str) or not result.strip()
+            ):
+                logger.warning("%s generation returned empty output", label)
+                warnings.append(
+                    f"{label.replace('_', ' ').title()} generation failed"
+                )
+                continue
             if label == "title":
-                title = result
+                title = result.strip()
             elif label == "cover_letter":
-                cover_letter = result
+                cover_letter = result.strip()
             elif label == "outreach":
-                outreach_message = result
+                outreach_message = result.strip()
             elif label == "interview_prep":
                 interview_prep = result
 

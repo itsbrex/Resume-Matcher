@@ -1,0 +1,152 @@
+"""Real LiteLLM Router retry and structured-content contracts."""
+
+import asyncio
+import json
+from typing import Any
+
+import litellm
+import pytest
+
+from app import llm
+from app.llm import LLMConfig
+
+
+CONFIG = LLMConfig(provider="openai", model="gpt-4o", api_key="synthetic")
+
+
+def _error(kind: str) -> Exception:
+    error_type = getattr(litellm, kind)
+    return error_type(
+        message="synthetic transport failure",
+        model="gpt-4o",
+        llm_provider="openai",
+    )
+
+
+def _response(payload: object) -> litellm.ModelResponse:
+    return litellm.ModelResponse(
+        model="gpt-4o",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": json.dumps(payload)},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected_calls"),
+    [
+        ("AuthenticationError", 1),
+        ("BadRequestError", 1),
+        ("ContentPolicyViolationError", 1),
+        ("Timeout", 3),
+        ("InternalServerError", 3),
+        ("RateLimitError", 4),
+    ],
+)
+async def test_real_router_enforces_transport_retry_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    expected_calls: int,
+) -> None:
+    """Installed Router dispatch must match the documented per-class budget."""
+    router = llm._build_router(CONFIG)
+    calls = 0
+
+    async def failing_provider(**_kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        raise _error(kind)
+
+    monkeypatch.setattr(litellm, "acompletion", failing_provider)
+    monkeypatch.setattr(router, "_time_to_sleep_before_retry", lambda **_kwargs: 0)
+    monkeypatch.setattr(llm, "get_router", lambda _config=None: (router, CONFIG))
+    monkeypatch.setattr(llm, "_supports_json_mode", lambda _model: False)
+
+    with pytest.raises(Exception):
+        await llm.complete_json("synthetic", retries=3)
+
+    assert calls == expected_calls
+
+
+async def test_exhausted_transport_error_does_not_start_content_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Content retries cannot multiply an exhausted Router timeout budget."""
+    router = llm._build_router(CONFIG)
+    calls = 0
+
+    async def failing_provider(**_kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        raise _error("Timeout")
+
+    monkeypatch.setattr(litellm, "acompletion", failing_provider)
+    monkeypatch.setattr(router, "_time_to_sleep_before_retry", lambda **_kwargs: 0)
+    monkeypatch.setattr(llm, "get_router", lambda _config=None: (router, CONFIG))
+    monkeypatch.setattr(llm, "_supports_json_mode", lambda _model: False)
+
+    with pytest.raises(litellm.Timeout):
+        await llm.complete_json("synthetic", retries=3)
+
+    assert calls == 3
+
+
+async def test_recovered_transport_retry_accepts_legitimate_sparse_resume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty optional sections are schema-valid and must not cause regeneration."""
+    router = llm._build_router(CONFIG)
+    calls = 0
+    sparse = {
+        "personalInfo": {"name": "Sparse Candidate"},
+        "workExperience": [],
+        "education": [],
+    }
+
+    async def alternating(**_kwargs: Any) -> litellm.ModelResponse:
+        nonlocal calls
+        calls += 1
+        if calls % 2:
+            raise _error("Timeout")
+        return _response(sparse)
+
+    monkeypatch.setattr(litellm, "acompletion", alternating)
+    monkeypatch.setattr(router, "_time_to_sleep_before_retry", lambda **_kwargs: 0)
+    monkeypatch.setattr(llm, "get_router", lambda _config=None: (router, CONFIG))
+    monkeypatch.setattr(llm, "_supports_json_mode", lambda _model: False)
+
+    result = await llm.complete_json("synthetic", retries=3, schema_type="resume")
+
+    assert result == sparse
+    assert calls == 2
+
+
+async def test_real_router_propagates_cancellation_without_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Caller cancellation reaches the provider once and is never classified."""
+    router = llm._build_router(CONFIG)
+    cancelled = asyncio.Event()
+    calls = 0
+
+    async def blocking_provider(**_kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    monkeypatch.setattr(litellm, "acompletion", blocking_provider)
+    monkeypatch.setattr(llm, "get_router", lambda _config=None: (router, CONFIG))
+    monkeypatch.setattr(llm, "_supports_json_mode", lambda _model: False)
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(llm.complete_json("synthetic"), timeout=0.05)
+
+    assert cancelled.is_set()
+    assert calls == 1

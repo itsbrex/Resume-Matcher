@@ -5,6 +5,7 @@ import copy
 import json
 import logging
 import re
+from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
@@ -25,6 +26,7 @@ from app.schemas.enrichment import (
     ApplyEnhancementsRequest,
     EnhancedDescription,
     EnhanceRequest,
+    EnhancementItemError,
     EnhancementPreview,
     EnrichmentItem,
     EnrichmentQuestion,
@@ -38,6 +40,47 @@ from app.schemas.enrichment import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/enrichment", tags=["Enrichment"])
+
+
+def _validate_text_replacements(
+    result: dict[str, Any],
+    field_names: tuple[str, ...],
+) -> dict[str, Any]:
+    """Require a non-empty replacement list without coercing invalid leaves."""
+    field = next((name for name in field_names if name in result), None)
+    if field is None:
+        raise ValueError(f"LLM response is missing '{field_names[0]}'")
+    replacements = result[field]
+    if not isinstance(replacements, list) or not replacements:
+        raise ValueError(f"LLM response field '{field}' must be a non-empty list")
+    if any(not isinstance(item, str) or not item.strip() for item in replacements):
+        raise ValueError(f"LLM response field '{field}' must contain non-empty text")
+    return {**result, field_names[0]: [item.strip() for item in replacements]}
+
+
+def _validate_enhancement_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Validate enhanced bullets, including the legacy response field name."""
+    return _validate_text_replacements(
+        result,
+        ("additional_bullets", "enhanced_description"),
+    )
+
+
+def _validate_regenerated_item_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Validate regenerated experience or project bullets."""
+    return _validate_text_replacements(result, ("new_bullets",))
+
+
+def _validate_regenerated_skills_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Validate regenerated skill names."""
+    return _validate_text_replacements(result, ("new_skills",))
+
+
+def _validate_analysis_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Require the explicit enrichment-analysis contract; empty lists are valid."""
+    if "items_to_enrich" not in result or "questions" not in result:
+        raise ValueError("LLM analysis response is missing required list fields")
+    return AnalysisResponse.model_validate(result).model_dump()
 
 
 def _extract_item_from_resume(processed_data: dict, item_id: str) -> dict:
@@ -116,9 +159,15 @@ async def analyze_resume(resume_id: str) -> AnalysisResponse:
     try:
         # Call LLM with increased max_tokens for non-English languages
         result = await asyncio.wait_for(
-            complete_json(prompt, max_tokens=8192, schema_type="enrichment"),
+            complete_json(
+                prompt,
+                max_tokens=8192,
+                schema_type="enrichment",
+                response_validator=_validate_analysis_result,
+            ),
             timeout=180.0,  # 3-minute hard limit
         )
+        result = _validate_analysis_result(result)
 
         # Parse response into schema objects
         items_to_enrich = [
@@ -221,9 +270,15 @@ async def generate_enhancements(request: EnhanceRequest) -> EnhancementPreview:
 
         try:
             analysis_result = await asyncio.wait_for(
-                complete_json(analysis_prompt, max_tokens=8192, schema_type="enrichment"),
+                complete_json(
+                    analysis_prompt,
+                    max_tokens=8192,
+                    schema_type="enrichment",
+                    response_validator=_validate_analysis_result,
+                ),
                 timeout=180.0,
             )
+            analysis_result = _validate_analysis_result(analysis_result)
         except asyncio.TimeoutError:
             logger.error("Resume re-analysis timed out for resume %s", request.resume_id)
             raise HTTPException(
@@ -260,6 +315,7 @@ async def generate_enhancements(request: EnhanceRequest) -> EnhancementPreview:
 
     # Generate enhanced descriptions for each item
     enhancements: list[EnhancedDescription] = []
+    errors: list[EnhancementItemError] = []
 
     for item_id, answers in answers_by_item.items():
         item = item_details.get(item_id, {})
@@ -298,16 +354,13 @@ async def generate_enhancements(request: EnhanceRequest) -> EnhancementPreview:
         )
 
         try:
-            result = await complete_json(prompt, schema_type="diff")
-            # Get additional bullets from LLM (new key name)
-            additional_bullets = result.get("additional_bullets", [])
-            # Fallback to old key for backwards compatibility
-            if not additional_bullets:
-                additional_bullets = result.get("enhanced_description", [])
-            # Guard against non-list returns from LLM
-            if not isinstance(additional_bullets, list):
-                additional_bullets = []
-            additional_bullets = [str(b) for b in additional_bullets if b]
+            result = await complete_json(
+                prompt,
+                schema_type="diff",
+                response_validator=_validate_enhancement_result,
+            )
+            result = _validate_enhancement_result(result)
+            additional_bullets = result["additional_bullets"]
 
             enhancements.append(
                 EnhancedDescription(
@@ -319,10 +372,27 @@ async def generate_enhancements(request: EnhanceRequest) -> EnhancementPreview:
                 )
             )
         except Exception as e:
-            logger.warning(f"Failed to enhance item {item_id}: {e}")
-            # Continue with other items
+            logger.warning("Failed to enhance item %s: %s", item_id, e, exc_info=e)
+            errors.append(
+                EnhancementItemError(
+                    item_id=item_id,
+                    item_type=item.get("item_type", "experience"),
+                    title=item.get("title", ""),
+                    subtitle=item.get("subtitle"),
+                    message="Failed to enhance this item. Please try again.",
+                )
+            )
 
-    return EnhancementPreview(enhancements=enhancements)
+    if answers_by_item and not enhancements:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Failed to generate enhancements. "
+                "Original resume content was preserved."
+            ),
+        )
+
+    return EnhancementPreview(enhancements=enhancements, errors=errors)
 
 
 @router.post("/apply/{resume_id}")
@@ -434,12 +504,14 @@ async def _regenerate_experience_or_project(
         user_instruction=instruction,
     )
 
-    result = await complete_json(prompt, max_tokens=4096, schema_type="diff")
-
-    new_bullets = result.get("new_bullets", [])
-    if not isinstance(new_bullets, list):
-        new_bullets = []
-    new_bullets = [str(b) for b in new_bullets if b]
+    result = await complete_json(
+        prompt,
+        max_tokens=4096,
+        schema_type="diff",
+        response_validator=_validate_regenerated_item_result,
+    )
+    result = _validate_regenerated_item_result(result)
+    new_bullets = result["new_bullets"]
 
     return RegeneratedItem(
         item_id=item.item_id,
@@ -466,12 +538,14 @@ async def _regenerate_skills(
         user_instruction=instruction,
     )
 
-    result = await complete_json(prompt, max_tokens=2048, schema_type="diff")
-
-    new_skills = result.get("new_skills", [])
-    if not isinstance(new_skills, list):
-        new_skills = []
-    new_skills = [str(s) for s in new_skills if s]
+    result = await complete_json(
+        prompt,
+        max_tokens=2048,
+        schema_type="diff",
+        response_validator=_validate_regenerated_skills_result,
+    )
+    result = _validate_regenerated_skills_result(result)
+    new_skills = result["new_skills"]
 
     return RegeneratedItem(
         item_id=item.item_id,

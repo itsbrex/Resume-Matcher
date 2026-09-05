@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import threading
+from collections.abc import Callable
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
@@ -736,6 +737,31 @@ _router_config_key: str = ""
 _router_lock = threading.Lock()
 
 
+class _PolicyRouter(Router):
+    """Apply the complete app retry policy with the installed LiteLLM Router.
+
+    LiteLLM 1.86.2's retry-policy dispatcher does not classify
+    ``InternalServerError`` even though ``RetryPolicy`` exposes the matching
+    field. Its ``None`` result falls back to the Router-wide retry count.
+    Keep that compatibility correction confined to the omitted exception.
+    """
+
+    async def make_call(
+        self,
+        original_function: Any,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        try:
+            return await super().make_call(original_function, *args, **kwargs)
+        except litellm.InternalServerError as error:
+            # async_function_with_retries honors an exception-local override
+            # before its incomplete policy dispatcher. The attribute is part
+            # of Router's own deployment-specific retry mechanism.
+            error.num_retries = 2
+            raise
+
+
 def _config_fingerprint(config: LLMConfig) -> str:
     """Generate a fingerprint to detect config changes.
 
@@ -763,7 +789,7 @@ def _build_router(config: LLMConfig) -> Router:
     if api_version:
         litellm_params["api_version"] = api_version
 
-    return Router(
+    return _PolicyRouter(
         model_list=[
             {
                 "model_name": "primary",
@@ -974,8 +1000,9 @@ async def complete(
         # Strip thinking tags from reasoning models (deepseek-r1, qwq, etc.)
         if "<think>" in content:
             content = _strip_thinking_tags(content)
-            if not content:
-                raise ValueError("Response contained only thinking content, no output")
+        content = content.strip()
+        if not content:
+            raise ValueError("Response contained no visible output")
         return content
     except Exception as e:
         # Log the actual error server-side for debugging
@@ -1120,16 +1147,9 @@ def _appears_truncated(data: dict, schema_type: str = "resume") -> bool:
         return False
 
     if schema_type == "resume":
-        # Full resume structure: check for empty required arrays
-        suspicious_empty_arrays = ["workExperience", "education", "skills"]
-        for key in suspicious_empty_arrays:
-            if key in data and data[key] == []:
-                # Log warning - these are rarely empty in real resumes
-                logging.warning(
-                    "Possible truncation detected: '%s' is empty",
-                    key,
-                )
-                return True
+        # A resume can legitimately omit or empty every optional section.
+        # Callers that need stronger guarantees provide a response validator
+        # based on their source contract.
         return False
 
     if schema_type == "enrichment":
@@ -1372,6 +1392,9 @@ def _extract_json(content: str, _depth: int = 0) -> str:
 
     content = content.strip()
 
+    if content.startswith("["):
+        raise ValueError("Expected a JSON object, received a top-level array")
+
     # If content starts with {, find the matching }
     if content.startswith("{"):
         depth = 0
@@ -1434,6 +1457,7 @@ async def complete_json(
     max_tokens: int = 4096,
     retries: int = 2,
     schema_type: str = "resume",
+    response_validator: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Make a completion request expecting JSON response.
 
@@ -1445,6 +1469,8 @@ async def complete_json(
         schema_type: Expected schema — "resume", "enrichment", "diff",
             "keywords", or "interview_prep". Passed to _appears_truncated for
             context-aware truncation detection and used to tailor retry hints.
+        response_validator: Optional synchronous schema/source validator. A
+            ``ValueError`` rejects the content inside this retry budget.
     """
     router, config = get_router(config)
     model_name = get_model_name(config)
@@ -1534,8 +1560,13 @@ async def complete_json(
             json_str = _extract_json(content)
             result = json.loads(json_str)
 
+            if not isinstance(result, dict):
+                raise ValueError("Expected a JSON object")
+            if response_validator is not None:
+                result = response_validator(result)
+
             # LLM-001: Check if parsed result appears truncated
-            if isinstance(result, dict) and _appears_truncated(result, schema_type):
+            if _appears_truncated(result, schema_type):
                 if attempt < retries:
                     logging.warning(
                         "Parsed JSON appears truncated (attempt %d/%d), retrying",

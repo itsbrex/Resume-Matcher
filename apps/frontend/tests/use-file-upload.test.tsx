@@ -32,54 +32,70 @@ afterEach(() => {
 });
 
 describe('useFileUpload request lifecycle', () => {
-  it('emits one success and one file-list event for one request in StrictMode', async () => {
-    const onUploadSuccess = vi.fn();
-    const onFilesChange = vi.fn();
-    const onFilesAdded = vi.fn();
-    const fetchMock = vi.fn().mockResolvedValue(uploadResponse('resume-1'));
-    vi.stubGlobal('fetch', fetchMock);
-    const { result } = renderHook(
-      () =>
-        useFileUpload({
-          uploadUrl: '/api/v1/resumes/upload',
-          onUploadSuccess,
-          onFilesChange,
-          onFilesAdded,
-        }),
-      { wrapper: ({ children }) => <React.StrictMode>{children}</React.StrictMode> }
-    );
+  describe.each(['normal', 'StrictMode'] as const)('completed results (%s)', (mode) => {
+    it('emits one success and one file-list event for one request', async () => {
+      const onUploadSuccess = vi.fn();
+      const onFilesChange = vi.fn();
+      const onFilesAdded = vi.fn();
+      const fetchMock = vi.fn().mockResolvedValue(uploadResponse('resume-1'));
+      vi.stubGlobal('fetch', fetchMock);
+      const { result } = renderHook(
+        () =>
+          useFileUpload({
+            uploadUrl: '/api/v1/resumes/upload',
+            onUploadSuccess,
+            onFilesChange,
+            onFilesAdded,
+          }),
+        {
+          wrapper: ({ children }) =>
+            mode === 'StrictMode' ? (
+              <React.StrictMode>{children}</React.StrictMode>
+            ) : (
+              <>{children}</>
+            ),
+        }
+      );
 
-    act(() => result.current[1].addFiles([resumeFile()]));
+      act(() => result.current[1].addFiles([resumeFile()]));
 
-    await waitFor(() => expect(onUploadSuccess).toHaveBeenCalledTimes(1));
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(onFilesChange).toHaveBeenCalledTimes(1);
-    expect(onFilesAdded).toHaveBeenCalledTimes(1);
-  });
+      await waitFor(() => expect(onUploadSuccess).toHaveBeenCalledTimes(1));
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(onFilesChange).toHaveBeenCalledTimes(1);
+      expect(onFilesAdded).toHaveBeenCalledTimes(1);
+    });
 
-  it('emits one error for one failed request in StrictMode', async () => {
-    const onUploadError = vi.fn();
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(
-        new Response('synthetic failure', {
-          status: 500,
-          statusText: 'Internal Server Error',
-        })
-      )
-    );
-    const { result } = renderHook(
-      () =>
-        useFileUpload({
-          uploadUrl: '/api/v1/resumes/upload',
-          onUploadError,
-        }),
-      { wrapper: ({ children }) => <React.StrictMode>{children}</React.StrictMode> }
-    );
+    it('emits one error for one failed request', async () => {
+      const onUploadError = vi.fn();
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(
+          new Response('synthetic failure', {
+            status: 500,
+            statusText: 'Internal Server Error',
+          })
+        )
+      );
+      const { result } = renderHook(
+        () =>
+          useFileUpload({
+            uploadUrl: '/api/v1/resumes/upload',
+            onUploadError,
+          }),
+        {
+          wrapper: ({ children }) =>
+            mode === 'StrictMode' ? (
+              <React.StrictMode>{children}</React.StrictMode>
+            ) : (
+              <>{children}</>
+            ),
+        }
+      );
 
-    act(() => result.current[1].addFiles([resumeFile()]));
+      act(() => result.current[1].addFiles([resumeFile()]));
 
-    await waitFor(() => expect(onUploadError).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(onUploadError).toHaveBeenCalledTimes(1));
+    });
   });
 
   it('ends a hung upload at the shared request deadline with recoverable feedback', async () => {

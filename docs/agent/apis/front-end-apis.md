@@ -5,8 +5,7 @@
 ## Base Client (`lib/api/client.ts`)
 
 ```typescript
-export const API_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+export const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 export const API_BASE = `${API_URL}/api/v1`;
 
 export async function apiFetch(endpoint: string, options?: RequestInit);
@@ -116,33 +115,33 @@ updateLanguageConfig(language: string) → LanguageConfig
 ```typescript
 export const PROVIDER_INFO = {
   openai: {
-    name: "OpenAI",
-    defaultModel: "gpt-5-nano-2025-08-07",
+    name: 'OpenAI',
+    defaultModel: 'gpt-5-nano-2025-08-07',
     requiresKey: true,
   },
   anthropic: {
-    name: "Anthropic",
-    defaultModel: "claude-haiku-4-5-20251001",
+    name: 'Anthropic',
+    defaultModel: 'claude-haiku-4-5-20251001',
     requiresKey: true,
   },
   openrouter: {
-    name: "OpenRouter",
-    defaultModel: "deepseek/deepseek-chat",
+    name: 'OpenRouter',
+    defaultModel: 'deepseek/deepseek-chat',
     requiresKey: true,
   },
   gemini: {
-    name: "Google Gemini",
-    defaultModel: "gemini-3-flash-preview",
+    name: 'Google Gemini',
+    defaultModel: 'gemini-3-flash-preview',
     requiresKey: true,
   },
   deepseek: {
-    name: "DeepSeek",
-    defaultModel: "deepseek-chat",
+    name: 'DeepSeek',
+    defaultModel: 'deepseek-chat',
     requiresKey: true,
   },
   ollama: {
-    name: "Ollama (Local)",
-    defaultModel: "gemma3:4b",
+    name: 'Ollama (Local)',
+    defaultModel: 'gemma3:4b',
     requiresKey: false,
   },
 };
@@ -151,7 +150,7 @@ export const PROVIDER_INFO = {
 ## Usage
 
 ```typescript
-import { fetchResume, API_BASE, PROVIDER_INFO } from "@/lib/api";
+import { fetchResume, API_BASE, PROVIDER_INFO } from '@/lib/api';
 ```
 
 Legacy `.doc` files pass compound-file header validation, but the bundled MarkItDown DOCX converter does not guarantee binary Word conversion. Convert legacy Word documents to PDF or DOCX for reliable upload.

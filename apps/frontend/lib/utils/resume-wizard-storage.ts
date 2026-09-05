@@ -345,3 +345,35 @@ export function clearResumeWizardDraft(): boolean {
     return false;
   }
 }
+
+/** A failed remove can leave an already finalized review draft behind. */
+export function writeResumeWizardCompletion(resumeId: string): boolean {
+  try {
+    localStorage.setItem(
+      RESUME_WIZARD_DRAFT_STORAGE_KEY,
+      JSON.stringify({
+        schemaVersion: RESUME_WIZARD_DRAFT_SCHEMA_VERSION,
+        completedResumeId: resumeId,
+      })
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function readResumeWizardCompletion(): string | null {
+  try {
+    const value: unknown = JSON.parse(
+      localStorage.getItem(RESUME_WIZARD_DRAFT_STORAGE_KEY) ?? 'null'
+    );
+    return isRecord(value) &&
+      value.schemaVersion === RESUME_WIZARD_DRAFT_SCHEMA_VERSION &&
+      typeof value.completedResumeId === 'string' &&
+      value.completedResumeId.trim()
+      ? value.completedResumeId
+      : null;
+  } catch {
+    return null;
+  }
+}

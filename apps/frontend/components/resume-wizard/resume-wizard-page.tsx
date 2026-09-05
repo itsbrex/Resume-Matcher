@@ -8,6 +8,8 @@ import { useStatusCache } from '@/lib/context/status-cache';
 import { useTranslations } from '@/lib/i18n';
 import {
   clearResumeWizardDraft,
+  readResumeWizardCompletion,
+  writeResumeWizardCompletion,
   readResumeWizardDraft,
   writeResumeWizardDraft,
 } from '@/lib/utils/resume-wizard-storage';
@@ -45,8 +47,14 @@ export function ResumeWizardPage() {
   const [showLeaveWithoutDraftDialog, setShowLeaveWithoutDraftDialog] = useState(false);
 
   useEffect(() => {
-    const saved = readResumeWizardDraft();
-    if (saved) setState(saved);
+    const completedId = readResumeWizardCompletion();
+    if (completedId) {
+      setCreatedResumeId(completedId);
+      setState((current) => ({ ...current, step: 'complete' }));
+    } else {
+      const saved = readResumeWizardDraft();
+      if (saved) setState(saved);
+    }
     setIsLoaded(true);
   }, []);
 
@@ -147,7 +155,7 @@ export function ResumeWizardPage() {
       // The server commit is authoritative; a blocked browser cache must not
       // turn an acknowledged creation back into a retryable create action.
     }
-    clearResumeWizardDraft();
+    if (!clearResumeWizardDraft()) writeResumeWizardCompletion(resumeId);
     try {
       incrementResumes();
       setHasMasterResume(true);

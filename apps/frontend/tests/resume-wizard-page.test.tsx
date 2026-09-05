@@ -502,4 +502,34 @@ describe('ResumeWizardPage', () => {
     );
     expect(push).toHaveBeenCalledWith('/dashboard');
   });
+  it('reopens the acknowledged resume after reload when draft removal fails', async () => {
+    localStorage.setItem(
+      'resume_wizard_draft',
+      JSON.stringify(makeState({ step: 'review', resume_data: { personalInfo: { name: 'Ada' } } }))
+    );
+    mockedFinalize.mockResolvedValue({
+      message: 'Created',
+      request_id: 'ack',
+      resume_id: 'saved-resume',
+      processing_status: 'ready',
+      is_master: true,
+    });
+    vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new Error('blocked remove');
+    });
+    push.mockImplementation(() => {
+      throw new Error('navigation failed');
+    });
+    const view = render(<ResumeWizardPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'resumeWizard.actions.create' }));
+    await screen.findByRole('button', { name: 'resumeWizard.actions.openCreated' });
+    view.unmount();
+    render(<ResumeWizardPage />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'resumeWizard.actions.openCreated' })
+    );
+    expect(push).toHaveBeenLastCalledWith('/builder?id=saved-resume');
+    expect(mockedFinalize).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: 'resumeWizard.actions.create' })).toBeNull();
+  });
 });

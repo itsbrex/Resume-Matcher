@@ -77,7 +77,7 @@ async def test_real_router_enforces_transport_retry_budget(
     monkeypatch.setattr(llm, "get_router", lambda _config=None: (router, CONFIG))
     monkeypatch.setattr(llm, "_supports_json_mode", lambda _model: False)
 
-    with pytest.raises(Exception):
+    with pytest.raises(getattr(litellm, kind)):
         await llm.complete_json("synthetic", retries=3)
 
     assert calls == expected_calls
@@ -293,11 +293,13 @@ async def test_real_router_propagates_cancellation_without_retry(
     """Caller cancellation reaches the provider once and is never classified."""
     router = llm._build_router(CONFIG)
     cancelled = asyncio.Event()
+    started = asyncio.Event()
     calls = 0
 
     async def blocking_provider(**_kwargs: Any) -> Any:
         nonlocal calls
         calls += 1
+        started.set()
         try:
             await asyncio.Event().wait()
         finally:
@@ -307,8 +309,11 @@ async def test_real_router_propagates_cancellation_without_retry(
     monkeypatch.setattr(llm, "get_router", lambda _config=None: (router, CONFIG))
     monkeypatch.setattr(llm, "_supports_json_mode", lambda _model: False)
 
-    with pytest.raises(asyncio.TimeoutError):
-        await asyncio.wait_for(llm.complete_json("synthetic"), timeout=0.05)
+    task = asyncio.create_task(llm.complete_json("synthetic"))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
     assert cancelled.is_set()
     assert calls == 1

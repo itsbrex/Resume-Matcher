@@ -600,6 +600,14 @@ async def inject_keywords(
         job_description=truncated_jd,
     )
 
+    def validate_writer_result(result: dict[str, Any]) -> dict[str, Any]:
+        if not _validate_resume_structure(result):
+            raise ValueError("Keyword injection corrupted resume structure")
+        for field in ("workExperience", "education", "personalProjects"):
+            if tailored.get(field) and not result.get(field):
+                raise ValueError(f"Keyword injection omitted populated {field}")
+        return result
+
     try:
         result = await complete_json(
             prompt=prompt,
@@ -608,6 +616,7 @@ async def inject_keywords(
                 "fabricated content. Return only valid JSON matching the input schema."
             ),
             max_tokens=8192,
+            response_validator=validate_writer_result,
         )
 
         # LLM-014: Validate the result maintains required structure

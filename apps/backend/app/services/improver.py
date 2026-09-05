@@ -949,7 +949,7 @@ async def improve_resume(
     Returns:
         Improved resume data matching ResumeData schema
 
-    LLM-006: Validates for truncation before Pydantic validation.
+    LLM-006: Validates the structured result inside the content-retry budget.
     LLM-011: Sanitizes job description to prevent prompt injection.
     """
     keywords_str = _prepare_keywords_for_prompt(job_keywords)

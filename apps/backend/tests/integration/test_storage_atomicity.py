@@ -319,3 +319,14 @@ async def test_existing_tracker_card_does_not_wait_for_writer(isolated_db: Datab
     async with isolated_db._write_session():
         duplicate = await asyncio.wait_for(isolated_db.create_application(job_id="job", resume_id="resume"), 0.2)
     assert duplicate == card
+
+
+async def test_busy_manual_card_creation_cleans_up_its_job(isolated_db: Database, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.database import DatabaseBusyError
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(isolated_db, "create_application", AsyncMock(side_effect=DatabaseBusyError("synthetic contention")))
+    async with AsyncClient(transport=ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test") as client:
+        response = await client.post("/api/v1/applications", json={"resume_id": "synthetic", "job_description": "Engineer", "company": "Acme", "role": "Engineer"})
+    assert response.status_code == 503
+    async with isolated_db._session() as session:
+        assert list((await session.execute(select(Job))).scalars()) == []

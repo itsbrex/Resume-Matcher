@@ -81,24 +81,20 @@ async def create_application(request: ManualApplicationCreate) -> ApplicationRes
             role=role,
             notes=request.notes,
         )
-    except DatabaseBusyError:
-        raise
     except Exception as e:
         logger.error("Failed to create application: %s", e)
         try:
             await db.delete_job(job["job_id"])
-        except DatabaseBusyError:
-            raise
         except Exception as cleanup_error:
             logger.warning("Failed to clean up orphan job %s: %s", job["job_id"], cleanup_error)
+        if isinstance(e, DatabaseBusyError):
+            raise
         raise HTTPException(status_code=500, detail="Failed to create application. Please try again.")
 
     # Best-effort: cache company/role on the job for later reuse — never 500.
     if company or role:
         try:
             await db.update_job(job["job_id"], {"company": company, "role": role})
-        except DatabaseBusyError:
-            raise
         except Exception as e:
             logger.warning("Failed to cache company/role on job %s: %s", job["job_id"], e)
 

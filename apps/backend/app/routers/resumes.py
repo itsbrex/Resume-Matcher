@@ -102,8 +102,6 @@ async def _auto_create_tracker_application(
             company=company,
             role=role,
         )
-    except DatabaseBusyError:
-        raise
     except Exception as e:  # noqa: BLE001 - tracker is non-critical
         logger.warning("Failed to auto-create tracker application: %s", e)
 
@@ -505,8 +503,6 @@ def _build_ats_score(
             injectable_keywords=ats_raw["injectable_keywords"],
             recommendations=ats_raw["recommendations"],
         )
-    except DatabaseBusyError:
-        raise
     except Exception as e:
         logger.warning("ATS score computation failed", exc_info=True)
         return None
@@ -529,8 +525,6 @@ def _calculate_diff_from_resume(
     try:
         summary, changes = calculate_resume_diff(original_data, improved_data)
         return summary, changes, None
-    except DatabaseBusyError:
-        raise
     except Exception as e:
         logger.warning("Skipping resume diff due to calculation failure: %s", e)
         return None, None, f"calculation_error: {str(e)}"
@@ -994,8 +988,6 @@ async def _improve_preview_flow(
                     "Failed to persist job keywords for job %s.",
                     request.job_id,
                 )
-        except DatabaseBusyError:
-            raise
         except Exception as e:
             logger.warning(
                 "Failed to persist job keywords for job %s: %s",
@@ -1032,8 +1024,6 @@ async def _improve_preview_flow(
                 response_warnings.append(
                     f"{len(rejected_targets)} unsupported skill target(s) rejected"
                 )
-        except DatabaseBusyError:
-            raise
         except Exception as e:
             logger.warning("Skill target planning failed, continuing without it: %s", e)
             response_warnings.append("Skill target planning failed")
@@ -1150,8 +1140,6 @@ async def _improve_preview_flow(
                 refinement_result.passes_completed,
                 len(refinement_result.ai_phrases_removed),
             )
-    except DatabaseBusyError:
-        raise
     except Exception as e:
         logger.warning("Refinement failed, using unrefined result: %s", e)
         if refinement_attempted:

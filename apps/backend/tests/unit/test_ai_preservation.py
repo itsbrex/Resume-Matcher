@@ -3,6 +3,7 @@
 import copy
 from typing import Any
 from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
 
 from app.schemas.models import ResumeData
 from app.services.parser import restore_dates_from_markdown
@@ -14,6 +15,7 @@ from app.services.resume_preservation import (
     validate_confirmed_resume,
 )
 from app.schemas.refinement import RefinementConfig
+from app.routers import resumes
 
 
 def _source_resume() -> dict[str, Any]:
@@ -518,6 +520,37 @@ async def test_refiner_rolls_back_malformed_nested_writer_output() -> None:
         )
 
     assert result.refined_data == source
+
+
+def test_ats_score_uses_post_preservation_resume_match() -> None:
+    ats_payload = {
+        "overall_score": 25.0,
+        "sub_scores": {
+            "keyword_match": 25.0,
+            "experience_alignment": 0.0,
+            "skills_coverage": 0.0,
+            "education_fit": 0.0,
+            "format_quality": 0.0,
+        },
+        "missing_keywords": [],
+        "injectable_keywords": [],
+        "recommendations": [],
+    }
+    with (
+        patch("app.routers.resumes.calculate_keyword_match", return_value=25.0),
+        patch("app.routers.resumes.compute_ats_score", return_value=ats_payload) as score,
+    ):
+        resumes._build_ats_score(
+            {"summary": "Finalized"},
+            {"keywords": ["Python"]},
+            SimpleNamespace(
+                final_match_percentage=99.0,
+                keyword_analysis=None,
+            ),
+            True,
+        )
+
+    assert score.call_args.kwargs["keyword_match_percentage"] == 25.0
 
 
 def test_weakly_grounded_narrative_gets_stable_review_warning() -> None:

@@ -500,11 +500,7 @@ def _build_ats_score(
             if refinement_successful and refinement_result is not None
             else None
         )
-        final_match = (
-            refinement_result.final_match_percentage
-            if refinement_successful and refinement_result is not None
-            else calculate_keyword_match(improved_data, job_keywords)
-        )
+        final_match = calculate_keyword_match(improved_data, job_keywords)
         ats_raw = compute_ats_score(
             refined_resume=improved_data,
             job_keywords=job_keywords,

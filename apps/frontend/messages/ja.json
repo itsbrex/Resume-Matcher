@@ -99,6 +99,10 @@
       "dropzoneSubtitle": "PDF、DOC、DOCX（最大 4MB）",
       "tryDifferentFile": "別のファイルを試す",
       "parsingFailedKeepOpen": "AI 解析に失敗しました。別のファイルを試すか、このダイアログを閉じてください。"
+    },
+    "errors": {
+      "loadFailed": "履歴書を読み込めませんでした。もう一度お試しください。",
+      "deleteFailed": "履歴書を削除できませんでした。現在の履歴書は引き続き利用できます。"
     }
   },
   "builder": {
@@ -790,9 +794,13 @@
       "notProcessedYet": "履歴書はまだ処理されていません。カスタマイズ機能で構造化履歴書を生成してください。",
       "noDataAvailable": "利用可能な履歴書データがありません。",
       "failedToLoad": "履歴書データの読み込みに失敗しました。",
-      "failedToDelete": "履歴書の削除に失敗しました。もう一度お試しください。"
+      "failedToDelete": "履歴書の削除に失敗しました。もう一度お試しください。",
+      "failedToDownload": "履歴書をダウンロードできませんでした。もう一度お試しください。",
+      "failedToRename": "履歴書の名前を変更できませんでした。もう一度お試しください。"
     },
-    "titlePlaceholder": "履歴書のタイトルを入力..."
+    "titlePlaceholder": "履歴書のタイトルを入力...",
+    "downloadFailedTitle": "ダウンロードに失敗しました",
+    "renameFailedTitle": "名前の変更に失敗しました"
   },
   "preview": {
     "margins": "余白",

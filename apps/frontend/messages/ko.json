@@ -99,6 +99,10 @@
       "dropzoneSubtitle": "PDF, DOC, DOCX (최대 4MB)",
       "tryDifferentFile": "다른 파일 시도",
       "parsingFailedKeepOpen": "AI 분석에 실패했습니다. 다른 파일을 시도하거나 이 대화상자를 닫으세요."
+    },
+    "errors": {
+      "loadFailed": "이력서를 불러오지 못했습니다. 다시 시도해 주세요.",
+      "deleteFailed": "이력서를 삭제하지 못했습니다. 기존 이력서는 그대로 유지됩니다."
     }
   },
   "builder": {
@@ -790,9 +794,13 @@
       "notProcessedYet": "이력서가 아직 처리되지 않았습니다. 맞춤화 기능을 사용해 구조화된 이력서를 생성하세요.",
       "noDataAvailable": "이용 가능한 이력서 데이터가 없습니다.",
       "failedToLoad": "이력서 데이터를 불러오지 못했습니다.",
-      "failedToDelete": "이력서 삭제에 실패했습니다. 다시 시도해 주세요."
+      "failedToDelete": "이력서 삭제에 실패했습니다. 다시 시도해 주세요.",
+      "failedToDownload": "이력서를 다운로드하지 못했습니다. 다시 시도해 주세요.",
+      "failedToRename": "이력서 이름을 변경하지 못했습니다. 다시 시도해 주세요."
     },
-    "titlePlaceholder": "이력서 제목을 입력하세요..."
+    "titlePlaceholder": "이력서 제목을 입력하세요...",
+    "downloadFailedTitle": "다운로드 실패",
+    "renameFailedTitle": "이름 변경 실패"
   },
   "preview": {
     "margins": "여백",

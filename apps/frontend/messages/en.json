@@ -99,6 +99,10 @@
       "dropzoneSubtitle": "PDF, DOC, DOCX (Max 4MB)",
       "tryDifferentFile": "Try Different File",
       "parsingFailedKeepOpen": "AI parsing failed. Try a different file or close this dialog."
+    },
+    "errors": {
+      "loadFailed": "Unable to load resumes. Please try again.",
+      "deleteFailed": "Unable to delete the resume. Your existing resume is still available."
     }
   },
   "builder": {
@@ -790,9 +794,13 @@
       "notProcessedYet": "Resume has not been processed yet. Please use the Tailor feature to generate a structured resume.",
       "noDataAvailable": "No resume data available.",
       "failedToLoad": "Failed to load resume data.",
-      "failedToDelete": "Failed to delete resume. Please try again."
+      "failedToDelete": "Failed to delete resume. Please try again.",
+      "failedToDownload": "Failed to download resume. Please try again.",
+      "failedToRename": "Failed to rename resume. Please try again."
     },
-    "titlePlaceholder": "Enter resume title..."
+    "titlePlaceholder": "Enter resume title...",
+    "downloadFailedTitle": "Download Failed",
+    "renameFailedTitle": "Rename Failed"
   },
   "preview": {
     "margins": "Margins",

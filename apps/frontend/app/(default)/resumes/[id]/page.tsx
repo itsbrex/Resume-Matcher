@@ -47,6 +47,8 @@ export default function ResumeViewerPage() {
   const [showDeleteSuccessDialog, setShowDeleteSuccessDialog] = useState(false);
   const [showDownloadSuccessDialog, setShowDownloadSuccessDialog] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [renameError, setRenameError] = useState<string | null>(null);
   const [showEnrichmentModal, setShowEnrichmentModal] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -144,12 +146,14 @@ export default function ResumeViewerPage() {
       return;
     }
     try {
+      setRenameError(null);
       await renameResume(resumeId, trimmed);
       setResumeTitle(trimmed);
+      setIsEditingTitle(false);
     } catch (err) {
       console.error('Failed to rename resume:', err);
+      setRenameError(t('resumeViewer.errors.failedToRename'));
     }
-    setIsEditingTitle(false);
   };
 
   const handleTitleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -181,6 +185,7 @@ export default function ResumeViewerPage() {
   const handleDownload = async () => {
     setIsDownloading(true);
     try {
+      setDownloadError(null);
       const blob = await downloadResumePdf(resumeId, undefined, uiLanguage);
       const filename = sanitizeFilename(resumeTitle, resumeId, 'resume');
       downloadBlobAsFile(blob, filename);
@@ -191,10 +196,11 @@ export default function ResumeViewerPage() {
         const fallbackUrl = getResumePdfUrl(resumeId, undefined, uiLanguage);
         const didOpen = openUrlInNewTab(fallbackUrl);
         if (!didOpen) {
-          alert(t('common.popupBlocked', { url: fallbackUrl }));
+          setDownloadError(t('resumeViewer.errors.failedToDownload'));
         }
         return;
       }
+      setDownloadError(t('resumeViewer.errors.failedToDownload'));
     } finally {
       setIsDownloading(false);
     }
@@ -273,10 +279,11 @@ export default function ResumeViewerPage() {
           onOpenChange={() => setDeleteError(null)}
           title={t('resumeViewer.deleteFailedTitle')}
           description={deleteError}
-          confirmLabel={t('common.ok')}
-          onConfirm={() => setDeleteError(null)}
+          confirmLabel={t('common.retry')}
+          cancelLabel={t('common.cancel')}
+          onConfirm={handleDeleteResume}
+          onCancel={() => setDeleteError(null)}
           variant="danger"
-          showCancelButton={false}
         />
       )}
     </>
@@ -461,6 +468,30 @@ export default function ResumeViewerPage() {
       </div>
 
       {deleteDialogs}
+
+      <ConfirmDialog
+        open={downloadError !== null}
+        onOpenChange={(open) => !open && setDownloadError(null)}
+        title={t('resumeViewer.downloadFailedTitle')}
+        description={downloadError ?? ''}
+        confirmLabel={t('common.retry')}
+        cancelLabel={t('common.cancel')}
+        onConfirm={handleDownload}
+        onCancel={() => setDownloadError(null)}
+        variant="danger"
+      />
+
+      <ConfirmDialog
+        open={renameError !== null}
+        onOpenChange={(open) => !open && setRenameError(null)}
+        title={t('resumeViewer.renameFailedTitle')}
+        description={renameError ?? ''}
+        confirmLabel={t('common.retry')}
+        cancelLabel={t('common.cancel')}
+        onConfirm={handleTitleSave}
+        onCancel={() => setRenameError(null)}
+        variant="danger"
+      />
 
       <ConfirmDialog
         open={showDownloadSuccessDialog}

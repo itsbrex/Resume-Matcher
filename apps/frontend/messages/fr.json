@@ -99,6 +99,10 @@
       "dropzoneSubtitle": "PDF, DOC, DOCX (Max 4 Mo)",
       "tryDifferentFile": "Essayer un autre fichier",
       "parsingFailedKeepOpen": "L'analyse par IA a échoué. Essayez un autre fichier ou fermez cette boîte de dialogue."
+    },
+    "errors": {
+      "loadFailed": "Impossible de charger les CV. Veuillez réessayer.",
+      "deleteFailed": "Impossible de supprimer le CV. Votre CV actuel reste disponible."
     }
   },
   "builder": {
@@ -790,9 +794,13 @@
       "notProcessedYet": "Le CV n'a pas encore été traité. Veuillez utiliser la fonctionnalité de personnalisation pour générer un CV structuré.",
       "noDataAvailable": "Aucune donnée de CV disponible.",
       "failedToLoad": "Impossible de charger les données du CV.",
-      "failedToDelete": "Impossible de supprimer le CV. Veuillez réessayer."
+      "failedToDelete": "Impossible de supprimer le CV. Veuillez réessayer.",
+      "failedToDownload": "Impossible de télécharger le CV. Veuillez réessayer.",
+      "failedToRename": "Impossible de renommer le CV. Veuillez réessayer."
     },
-    "titlePlaceholder": "Saisissez le titre du CV..."
+    "titlePlaceholder": "Saisissez le titre du CV...",
+    "downloadFailedTitle": "Échec du téléchargement",
+    "renameFailedTitle": "Échec du renommage"
   },
   "preview": {
     "margins": "Marges",

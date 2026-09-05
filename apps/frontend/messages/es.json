@@ -99,6 +99,10 @@
       "dropzoneSubtitle": "PDF, DOC, DOCX (Máx. 4MB)",
       "tryDifferentFile": "Probar otro archivo",
       "parsingFailedKeepOpen": "El análisis de IA falló. Prueba otro archivo o cierra este diálogo."
+    },
+    "errors": {
+      "loadFailed": "No se pudieron cargar los currículums. Inténtalo de nuevo.",
+      "deleteFailed": "No se pudo eliminar el currículum. Tu currículum actual sigue disponible."
     }
   },
   "builder": {
@@ -790,9 +794,13 @@
       "notProcessedYet": "El currículum aún no se ha procesado. Usa la función de personalización para generar un currículum estructurado.",
       "noDataAvailable": "No hay datos de currículum disponibles.",
       "failedToLoad": "No se pudieron cargar los datos del currículum.",
-      "failedToDelete": "No se pudo eliminar el currículum. Inténtalo de nuevo."
+      "failedToDelete": "No se pudo eliminar el currículum. Inténtalo de nuevo.",
+      "failedToDownload": "No se pudo descargar el currículum. Inténtalo de nuevo.",
+      "failedToRename": "No se pudo cambiar el nombre del currículum. Inténtalo de nuevo."
     },
-    "titlePlaceholder": "Ingrese el título del currículum..."
+    "titlePlaceholder": "Ingrese el título del currículum...",
+    "downloadFailedTitle": "Error de descarga",
+    "renameFailedTitle": "Error al cambiar el nombre"
   },
   "preview": {
     "margins": "Márgenes",

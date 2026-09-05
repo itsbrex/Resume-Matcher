@@ -37,6 +37,8 @@ export default function DashboardPage() {
   const [masterResumeId, setMasterResumeId] = useState<string | null>(null);
   const [processingStatus, setProcessingStatus] = useState<ProcessingStatus>('loading');
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [listError, setListError] = useState(false);
+  const [deleteError, setDeleteError] = useState(false);
   const [tailoredResumes, setTailoredResumes] = useState<ResumeListItem[]>([]);
   const [isRetrying, setIsRetrying] = useState(false);
   const [isUploadDialogOpen, setIsUploadDialogOpen] = useState(false);
@@ -111,6 +113,7 @@ export default function DashboardPage() {
 
   const loadTailoredResumes = useCallback(async () => {
     try {
+      setListError(false);
       const data = await fetchResumeList(true);
       const masterFromList = data.find((r) => r.is_master);
       const storedId = localStorage.getItem('master_resume_id');
@@ -167,6 +170,7 @@ export default function DashboardPage() {
       }
     } catch (err) {
       console.error('Failed to load tailored resumes:', err);
+      setListError(true);
     }
   }, [checkResumeStatus]);
 
@@ -242,6 +246,7 @@ export default function DashboardPage() {
   const confirmDeleteAndReupload = async () => {
     if (!masterResumeId) return;
     try {
+      setDeleteError(false);
       await deleteResume(masterResumeId);
       decrementResumes();
       setHasMasterResume(false);
@@ -252,6 +257,8 @@ export default function DashboardPage() {
       await loadTailoredResumes();
     } catch (err) {
       console.error('Failed to delete resume:', err);
+      setShowDeleteDialog(false);
+      setDeleteError(true);
     }
   };
 
@@ -317,6 +324,28 @@ export default function DashboardPage() {
   // Use Tailwind classes for fillers now that we have them in config or use specific hex if needed
   // Using the hex values from before to maintain exact look, or we could map them to variants
   const fillerPalette = ['bg-secondary', 'bg-[#D8D8D2]', 'bg-[#CFCFC7]', 'bg-[#E0E0D8]'];
+
+  if (listError) {
+    return (
+      <div
+        role="alert"
+        className="m-6 border border-black bg-red-50 p-6 shadow-sw-default rounded-none"
+      >
+        <div className="flex items-start gap-3">
+          <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
+          <div>
+            <p className="font-mono text-sm font-bold uppercase text-red-700">
+              {t('dashboard.errors.loadFailed')}
+            </p>
+            <Button className="mt-4" variant="outline" onClick={loadTailoredResumes}>
+              <RefreshCw className="h-4 w-4" />
+              {t('common.retry')}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -572,6 +601,18 @@ export default function DashboardPage() {
           confirmLabel={t('dashboard.deleteAndReupload')}
           cancelLabel={t('confirmations.keepResumeCancelLabel')}
           onConfirm={confirmDeleteAndReupload}
+          variant="danger"
+        />
+
+        <ConfirmDialog
+          open={deleteError}
+          onOpenChange={setDeleteError}
+          title={t('common.error')}
+          description={t('dashboard.errors.deleteFailed')}
+          confirmLabel={t('common.retry')}
+          cancelLabel={t('common.cancel')}
+          onConfirm={confirmDeleteAndReupload}
+          onCancel={() => setDeleteError(false)}
           variant="danger"
         />
       </SwissGrid>

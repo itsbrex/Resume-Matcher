@@ -99,6 +99,10 @@
       "dropzoneSubtitle": "PDF, DOC, DOCX (Máximo 4MB)",
       "tryDifferentFile": "Tentar outro arquivo",
       "parsingFailedKeepOpen": "A análise de IA falhou. Tente outro arquivo ou feche este diálogo."
+    },
+    "errors": {
+      "loadFailed": "Não foi possível carregar os currículos. Tente novamente.",
+      "deleteFailed": "Não foi possível excluir o currículo. Seu currículo atual continua disponível."
     }
   },
   "builder": {
@@ -790,9 +794,13 @@
       "notProcessedYet": "O currículo ainda não foi processado. Por favor, use o recurso de Personalização para gerar um currículo estruturado.",
       "noDataAvailable": "Nenhum dado de currículo disponível.",
       "failedToLoad": "Falha ao carregar dados do currículo.",
-      "failedToDelete": "Falha ao excluir currículo. Por favor, tente novamente."
+      "failedToDelete": "Falha ao excluir currículo. Por favor, tente novamente.",
+      "failedToDownload": "Não foi possível baixar o currículo. Tente novamente.",
+      "failedToRename": "Não foi possível renomear o currículo. Tente novamente."
     },
-    "titlePlaceholder": "Digite o título do currículo..."
+    "titlePlaceholder": "Digite o título do currículo...",
+    "downloadFailedTitle": "Falha no download",
+    "renameFailedTitle": "Falha ao renomear"
   },
   "preview": {
     "margins": "Margens",

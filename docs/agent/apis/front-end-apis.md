@@ -5,7 +5,8 @@
 ## Base Client (`lib/api/client.ts`)
 
 ```typescript
-export const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+export const API_URL =
+  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 export const API_BASE = `${API_URL}/api/v1`;
 
 export async function apiFetch(endpoint: string, options?: RequestInit);
@@ -66,6 +67,10 @@ The wizard is an AI-led, one-question-at-a-time flow that builds a general maste
 
 ## Application Tracker (`lib/api/tracker.ts`)
 
+Tracker patches distinguish omission from explicit null: omitted `status` keeps the current column, while `status: null` returns 422. Nullable text/date fields remain clearable. Each move from `saved` to a non-saved column stamps `applied_at` if it has no date; explicit dates (including an explicitly cleared date in the same patch) are preserved. Bulk moves use the same rule. Moving back to `saved` retains any existing date; applying again fills a missing date. Moves between non-saved columns leave cleared dates empty.
+
+Create, move, and delete operations reserve the SQLite writer before allocating or renumbering column positions. This keeps positions contiguous across concurrent single/bulk operations and separate database connections; the resume/job pair uniqueness constraint remains independent.
+
 ```typescript
 // Kanban board (7 status columns: saved | applied | no_response |
 // response | interview | accepted | rejected)
@@ -110,19 +115,43 @@ updateLanguageConfig(language: string) → LanguageConfig
 
 ```typescript
 export const PROVIDER_INFO = {
-  openai: { name: 'OpenAI', defaultModel: 'gpt-5-nano-2025-08-07', requiresKey: true },
-  anthropic: { name: 'Anthropic', defaultModel: 'claude-haiku-4-5-20251001', requiresKey: true },
-  openrouter: { name: 'OpenRouter', defaultModel: 'deepseek/deepseek-chat', requiresKey: true },
-  gemini: { name: 'Google Gemini', defaultModel: 'gemini-3-flash-preview', requiresKey: true },
-  deepseek: { name: 'DeepSeek', defaultModel: 'deepseek-chat', requiresKey: true },
-  ollama: { name: 'Ollama (Local)', defaultModel: 'gemma3:4b', requiresKey: false },
+  openai: {
+    name: "OpenAI",
+    defaultModel: "gpt-5-nano-2025-08-07",
+    requiresKey: true,
+  },
+  anthropic: {
+    name: "Anthropic",
+    defaultModel: "claude-haiku-4-5-20251001",
+    requiresKey: true,
+  },
+  openrouter: {
+    name: "OpenRouter",
+    defaultModel: "deepseek/deepseek-chat",
+    requiresKey: true,
+  },
+  gemini: {
+    name: "Google Gemini",
+    defaultModel: "gemini-3-flash-preview",
+    requiresKey: true,
+  },
+  deepseek: {
+    name: "DeepSeek",
+    defaultModel: "deepseek-chat",
+    requiresKey: true,
+  },
+  ollama: {
+    name: "Ollama (Local)",
+    defaultModel: "gemma3:4b",
+    requiresKey: false,
+  },
 };
 ```
 
 ## Usage
 
 ```typescript
-import { fetchResume, API_BASE, PROVIDER_INFO } from '@/lib/api';
+import { fetchResume, API_BASE, PROVIDER_INFO } from "@/lib/api";
 ```
 
 Legacy `.doc` files pass compound-file header validation, but the bundled MarkItDown DOCX converter does not guarantee binary Word conversion. Convert legacy Word documents to PDF or DOCX for reliable upload.

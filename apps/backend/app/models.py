@@ -54,8 +54,8 @@ class Resume(Base):
 
     __table_args__ = (
         # At most one master resume. Partial unique index enforces the invariant
-        # at the storage layer; ``_master_resume_lock`` remains the primary
-        # (race-free) mechanism in the facade.
+        # at the storage layer; the facade serializes compound designation
+        # changes with a SQLite writer transaction.
         Index(
             "ux_resumes_single_master",
             "is_master",

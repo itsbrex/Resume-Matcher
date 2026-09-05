@@ -10,17 +10,16 @@ Two engines back one SQLite file:
   synchronous LLM hot path (``get_llm_config`` → ``resolve_api_key``).
 """
 
-import asyncio
 import logging
 import shutil
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
-from sqlalchemy import delete, func, select
-from sqlalchemy import and_, or_, update
+from sqlalchemy import and_, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session, sessionmaker
@@ -71,11 +70,6 @@ def _now() -> str:
 class Database:
     """Async SQLAlchemy facade for resume matcher data."""
 
-    # Serializes concurrent master-resume promotion. Stays the *primary*
-    # mechanism for the single-master invariant (the partial unique index is a
-    # storage-level backstop).
-    _master_resume_lock = asyncio.Lock()
-
     def __init__(self, db_path: Path | None = None):
         self.db_path = db_path or settings.sqlite_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -112,6 +106,18 @@ class Database:
         self._ensure_initialized()
         assert self._async_session_factory is not None
         return self._async_session_factory
+
+    @asynccontextmanager
+    async def _write_session(self) -> AsyncIterator[AsyncSession]:
+        """Reserve SQLite's writer before reading state that a write depends on.
+
+        The database reservation serializes across connections and processes,
+        unlike an in-memory lock. Callers commit the complete operation; closing
+        the session rolls back every change if any stage raises.
+        """
+        async with self._session() as session:
+            await session.execute(text("BEGIN IMMEDIATE"))
+            yield session
 
     @property
     def _sync(self) -> sessionmaker[Session]:
@@ -218,49 +224,30 @@ class Database:
 
         processing_status: "pending", "processing", "ready", "failed"
         """
-        resume_id = str(uuid4())
-        now = _now()
+        row = self._new_resume(
+            content=content,
+            content_type=content_type,
+            filename=filename,
+            is_master=is_master,
+            parent_id=parent_id,
+            processed_data=processed_data,
+            processing_status=processing_status,
+            cover_letter=cover_letter,
+            outreach_message=outreach_message,
+            interview_prep=interview_prep,
+            title=title,
+            original_markdown=original_markdown,
+        )
         async with self._session() as session:
-            session.add(
-                Resume(
-                    resume_id=resume_id,
-                    content=content,
-                    content_type=content_type,
-                    filename=filename,
-                    is_master=is_master,
-                    parent_id=parent_id,
-                    processed_data=processed_data,
-                    processing_status=processing_status,
-                    cover_letter=cover_letter,
-                    outreach_message=outreach_message,
-                    interview_prep=interview_prep,
-                    title=title,
-                    original_markdown=original_markdown,
-                    created_at=now,
-                    updated_at=now,
-                )
-            )
+            session.add(row)
             await session.commit()
+        return self._resume_to_dict(row)
 
-        doc: dict[str, Any] = {
-            "resume_id": resume_id,
-            "content": content,
-            "content_type": content_type,
-            "filename": filename,
-            "is_master": is_master,
-            "parent_id": parent_id,
-            "processed_data": processed_data,
-            "processing_status": processing_status,
-            "cover_letter": cover_letter,
-            "outreach_message": outreach_message,
-            "interview_prep": interview_prep,
-            "title": title,
-            "created_at": now,
-            "updated_at": now,
-        }
-        if original_markdown is not None:
-            doc["original_markdown"] = original_markdown
-        return doc
+    @staticmethod
+    def _new_resume(**values: Any) -> Resume:
+        """Construct a resume row for standalone or compound transactions."""
+        now = _now()
+        return Resume(resume_id=str(uuid4()), created_at=now, updated_at=now, **values)
 
     async def create_resume_atomic_master(
         self,
@@ -275,29 +262,22 @@ class Database:
         title: str | None = None,
         interview_prep: str | None = None,
     ) -> dict[str, Any]:
-        """Create a new resume with atomic master assignment.
-
-        Uses an asyncio.Lock to prevent race conditions when multiple uploads
-        happen concurrently and both try to become master.
-        """
-        async with self._master_resume_lock:
-            current_master = await self.get_master_resume()
+        """Create a resume and replace a failed master in one transaction."""
+        async with self._write_session() as session:
+            current_master = (
+                await session.execute(select(Resume).where(Resume.is_master.is_(True)))
+            ).scalar_one_or_none()
             is_master = current_master is None
-
-            # Recovery: if the current master is stuck failed/processing, demote
-            # it so this upload can become the new master.
-            if current_master and current_master.get("processing_status") in (
+            if current_master and current_master.processing_status in (
                 "failed",
                 "processing",
             ):
-                async with self._session() as session:
-                    row = await session.get(Resume, current_master["resume_id"])
-                    if row is not None:
-                        row.is_master = False
-                        await session.commit()
+                current_master.is_master = False
+                # Release the partial unique-index slot within this transaction.
+                # An insertion failure still rolls this demotion back.
+                await session.flush()
                 is_master = True
-
-            return await self.create_resume(
+            row = self._new_resume(
                 content=content,
                 content_type=content_type,
                 filename=filename,
@@ -307,9 +287,12 @@ class Database:
                 cover_letter=cover_letter,
                 outreach_message=outreach_message,
                 interview_prep=interview_prep,
-                original_markdown=original_markdown,
                 title=title,
+                original_markdown=original_markdown,
             )
+            session.add(row)
+            await session.commit()
+            return self._resume_to_dict(row)
 
     async def get_resume(self, resume_id: str) -> dict[str, Any] | None:
         """Get resume by ID."""
@@ -453,7 +436,7 @@ class Database:
         Returns False if the resume doesn't exist. Demote-then-promote happens
         in a single transaction so the partial unique index is never violated.
         """
-        async with self._session() as session:
+        async with self._write_session() as session:
             target = await session.get(Resume, resume_id)
             if target is None:
                 logger.warning("Cannot set master: resume %s not found", resume_id)
@@ -474,20 +457,27 @@ class Database:
     # -- Job operations -----------------------------------------------------
 
     async def create_job(self, content: str, resume_id: str | None = None) -> dict[str, Any]:
-        """Create a new job description entry."""
-        job_id = str(uuid4())
-        now = _now()
-        async with self._session() as session:
-            session.add(
-                Job(job_id=job_id, content=content, resume_id=resume_id, created_at=now, metadata_json={})
+        """Create one job description using the atomic batch writer."""
+        return (await self.create_jobs([content], resume_id))[0]
+
+    async def create_jobs(
+        self, contents: list[str], resume_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Persist a validated job-description batch atomically, in input order."""
+        rows = [
+            Job(
+                job_id=str(uuid4()),
+                content=content,
+                resume_id=resume_id,
+                created_at=_now(),
+                metadata_json={},
             )
+            for content in contents
+        ]
+        async with self._session() as session:
+            session.add_all(rows)
             await session.commit()
-        return {
-            "job_id": job_id,
-            "content": content,
-            "resume_id": resume_id,
-            "created_at": now,
-        }
+        return [self._job_to_dict(row) for row in rows]
 
     async def get_job(self, job_id: str) -> dict[str, Any] | None:
         """Get job by ID (dynamic fields flattened to top level)."""
@@ -613,7 +603,7 @@ class Database:
         If a card for the same job+resume already exists it is returned as-is
         (survives double-submit / retried confirms).
         """
-        async with self._session() as session:
+        async with self._write_session() as session:
             existing = await session.execute(
                 select(Application).where(
                     Application.job_id == job_id, Application.resume_id == resume_id
@@ -692,7 +682,7 @@ class Database:
         new) ``status`` column; siblings are renumbered server-side so the
         column stays a contiguous 0..n-1 sequence.
         """
-        async with self._session() as session:
+        async with self._write_session() as session:
             row = await session.get(Application, application_id)
             if row is None:
                 return None
@@ -704,6 +694,14 @@ class Database:
             for key in ("company", "role", "applied_at", "notes"):
                 if key in updates:
                     setattr(row, key, updates[key])
+
+            if (
+                old_status == "saved"
+                and new_status != "saved"
+                and row.applied_at is None
+                and "applied_at" not in updates
+            ):
+                row.applied_at = _now()
 
             moved = "status" in updates or "position" in updates
             if moved:
@@ -740,13 +738,19 @@ class Database:
     ) -> int:
         """Move many applications to the end of ``status``. Returns count moved."""
         moved = 0
-        async with self._session() as session:
+        async with self._write_session() as session:
             affected_old: set[str] = set()
             for application_id in application_ids:
                 row = await session.get(Application, application_id)
                 if row is None:
                     continue
                 affected_old.add(row.status)
+                if (
+                    row.status == "saved"
+                    and status != "saved"
+                    and row.applied_at is None
+                ):
+                    row.applied_at = _now()
                 row.status = status
                 row.position = 20_000_000 + moved  # provisional, renumbered below
                 row.updated_at = _now()
@@ -760,7 +764,7 @@ class Database:
 
     async def delete_application(self, application_id: str) -> bool:
         """Delete an application; renumber its column."""
-        async with self._session() as session:
+        async with self._write_session() as session:
             row = await session.get(Application, application_id)
             if row is None:
                 return False
@@ -774,7 +778,7 @@ class Database:
     async def bulk_delete_applications(self, application_ids: list[str]) -> int:
         """Delete many applications; renumber affected columns. Returns count."""
         deleted = 0
-        async with self._session() as session:
+        async with self._write_session() as session:
             affected: set[str] = set()
             for application_id in application_ids:
                 row = await session.get(Application, application_id)

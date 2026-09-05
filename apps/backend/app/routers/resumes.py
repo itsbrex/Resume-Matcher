@@ -549,6 +549,8 @@ def _calculate_diff_from_resume(
 def _validate_confirm_payload(
     original_data: dict[str, Any] | None,
     improved_data: dict[str, Any],
+    *,
+    allow_appended_rows: bool = False,
 ) -> None:
     if not original_data:
         logger.warning(
@@ -579,7 +581,9 @@ def _validate_confirm_payload(
     ]
     if mismatches:
         raise ValueError(f"personalInfo fields changed: {', '.join(mismatches)}")
-    preservation_violations = validate_confirmed_resume(original_data, improved_data)
+    preservation_violations = validate_confirmed_resume(
+        original_data, improved_data, allow_appended_rows=allow_appended_rows
+    )
     if preservation_violations:
         raise ValueError(
             "source preservation failed: " + ", ".join(preservation_violations)
@@ -1027,6 +1031,7 @@ async def _improve_preview_flow(
     original_resume_data = _get_original_resume_data(resume)
     # Collect warnings throughout the process
     response_warnings: list[str] = []
+    allow_appended_rows = False
 
     # Diff-based improvement: generate targeted changes, apply with verification
     if original_resume_data:
@@ -1072,6 +1077,10 @@ async def _improve_preview_flow(
             original=original_resume_data,
             changes=diff_result.changes,
             allowed_skill_targets=skill_targets,
+        )
+        allow_appended_rows = any(
+            change.action == "append"
+            for change in applied_changes
         )
 
         diff_warnings = verify_diff_result(
@@ -1176,7 +1185,11 @@ async def _improve_preview_flow(
             response_warnings.append(REFINEMENT_FAILED_WARNING)
 
     if original_resume_data:
-        improved_data = finalize_ai_resume(original_resume_data, improved_data)
+        improved_data = finalize_ai_resume(
+            original_resume_data,
+            improved_data,
+            allow_appended_rows=allow_appended_rows,
+        )
         response_warnings.extend(
             grounding_review_warnings(original_resume_data, improved_data)
         )
@@ -1282,10 +1295,12 @@ async def improve_resume_confirm_endpoint(
             original = _get_original_resume_data(resume)
             if original is None:
                 raise ValueError("Original resume data is unavailable; process the source before preview")
-            canonical = ResumeData.model_validate(finalize_ai_resume(original, improved_data)).model_dump()
+            canonical = ResumeData.model_validate(
+                finalize_ai_resume(original, improved_data, allow_appended_rows=True)
+            ).model_dump()
             if canonical != improved_data:
                 raise ValueError("Registered preview no longer satisfies preservation rules")
-            _validate_confirm_payload(original, improved_data)
+            _validate_confirm_payload(original, improved_data, allow_appended_rows=True)
         except ValueError as e:
             logger.warning("Resume confirm rejected: %s", e)
             raise HTTPException(
@@ -1439,6 +1454,7 @@ async def improve_resume_endpoint(
         original_resume_data = _get_original_resume_data(resume)
         # Collect warnings throughout the process
         response_warnings: list[str] = []
+        allow_appended_rows = False
 
         # Diff-based improvement: generate targeted changes, apply with verification
         if original_resume_data:
@@ -1454,6 +1470,10 @@ async def improve_resume_endpoint(
             improved_data, applied_changes, rejected_changes = apply_diffs(
                 original=original_resume_data,
                 changes=diff_result.changes,
+            )
+            allow_appended_rows = any(
+                change.action == "append"
+                for change in applied_changes
             )
 
             diff_warnings = verify_diff_result(
@@ -1562,15 +1582,15 @@ async def improve_resume_endpoint(
                 response_warnings.append(REFINEMENT_FAILED_WARNING)
 
         if original_resume_data:
-            review_warnings = grounding_review_warnings(
-                original_resume_data, improved_data
-            )
             improved_data = finalize_ai_resume(
                 original_resume_data,
                 improved_data,
                 allow_review_claims=False,
+                allow_appended_rows=allow_appended_rows,
             )
-            response_warnings.extend(review_warnings)
+            response_warnings.extend(
+                grounding_review_warnings(original_resume_data, improved_data)
+            )
 
         # Convert improved data to JSON string for storage
         improved_text = json.dumps(improved_data, indent=2)

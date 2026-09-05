@@ -482,7 +482,10 @@ _MD_DATE_RE = re.compile(
     re.IGNORECASE,
 )
 _MONTH_RE = re.compile(
-    r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)", re.IGNORECASE
+    r"\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?"
+    r"|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?"
+    r"|Dec(?:ember)?)",
+    re.IGNORECASE,
 )
 
 
@@ -511,23 +514,38 @@ def restore_dates_from_markdown(
             if re.search(r"\b(?:present|current|now|ongoing)\b", value, re.IGNORECASE)
             else ""
         )
+        if not suffix and len(years) == 2 and years[0] == years[1]:
+            years = years[:1]
         return " - ".join([*years, suffix] if suffix else years)
 
-    occurrences: list[tuple[str, str, str, str]] = []
+    occurrences: list[tuple[str, str, str, int]] = []
     lines = markdown.splitlines()
     for line_index, line in enumerate(lines):
-        line_context = line.casefold()
-        nearby_context = " ".join(lines[max(0, line_index - 2) : line_index]).casefold()
+        line_context = " ".join(line.casefold().split())
         for match in _MD_DATE_RE.finditer(line):
             full_date = re.sub(r"\s*[-–—]\s*", " - ", match.group(0).strip())
             key = date_key(full_date)
             if key:
-                occurrences.append((key, full_date, line_context, nearby_context))
+                occurrences.append((key, full_date, line_context, line_index))
     if not occurrences:
         return parsed_data
 
     used: set[int] = set()
     patched = 0
+    entry_count = sum(
+        sum(isinstance(entry, dict) for entry in parsed_data.get(section, []))
+        for section in ("workExperience", "education", "personalProjects")
+        if isinstance(parsed_data.get(section), list)
+    )
+    custom_data = parsed_data.get("customSections")
+    if isinstance(custom_data, dict):
+        entry_count += sum(
+            len(section.get("items", []))
+            for section in custom_data.values()
+            if isinstance(section, dict)
+            and section.get("sectionType") == "itemList"
+            and isinstance(section.get("items"), list)
+        )
 
     def restore_entry(entry: Any, identity_fields: tuple[str, ...]) -> None:
         nonlocal patched
@@ -544,26 +562,44 @@ def restore_dates_from_markdown(
         ]
         if not candidates:
             return
-        selected: int | None = candidates[0] if len(candidates) == 1 else None
-        if len(candidates) > 1:
-            terms = [
-                " ".join(str(entry.get(field, "")).split()).casefold()
-                for field in identity_fields
-                if str(entry.get(field, "")).strip()
-            ]
-            scored = []
-            for index in candidates:
-                line_context = occurrences[index][2]
-                nearby_context = occurrences[index][3]
-                score = sum(
-                    10 if term in line_context else 1 if term in nearby_context else 0
-                    for term in terms
-                )
-                scored.append((score, index))
-            best_score = max(score for score, _ in scored)
-            best = [index for score, index in scored if score == best_score]
-            if best_score > 0 and len(best) == 1:
-                selected = best[0]
+        terms = [
+            " ".join(str(entry.get(field, "")).split()).casefold()
+            for field in identity_fields
+            if str(entry.get(field, "")).strip()
+        ]
+        scored = []
+        for index in candidates:
+            line_context = occurrences[index][2]
+            line_index = occurrences[index][3]
+            matched_terms = 0
+            score = 0
+            for term in terms:
+                term_score = 20 if term in line_context else 0
+                for distance in range(1, 6):
+                    previous = line_index - distance
+                    if previous >= 0 and term in " ".join(
+                        lines[previous].casefold().split()
+                    ):
+                        term_score = max(term_score, 10 - distance)
+                for distance in range(1, 4):
+                    following = line_index + distance
+                    if following < len(lines) and term in " ".join(
+                        lines[following].casefold().split()
+                    ):
+                        term_score = max(term_score, 4 - distance)
+                if term_score:
+                    matched_terms += 1
+                    score += term_score
+            scored.append(((matched_terms, score), index))
+        best_score = max(score for score, _ in scored)
+        best = [index for score, index in scored if score == best_score]
+        selected: int | None = None
+        if best_score[0] > 0 and len(best) == 1 and (
+            entry_count == 1 or best_score[0] == len(terms)
+        ):
+            selected = best[0]
+        elif len(candidates) == 1 and entry_count == 1:
+            selected = candidates[0]
         if selected is None:
             logger.info("Date restoration left ambiguous value unchanged: %s", years)
             return

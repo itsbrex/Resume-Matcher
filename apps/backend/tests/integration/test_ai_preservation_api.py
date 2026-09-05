@@ -39,6 +39,7 @@ def _refinement_result(data: dict[str, Any]) -> SimpleNamespace:
         ai_phrases_removed=[],
         keyword_analysis=None,
         final_match_percentage=50.0,
+        alignment_report=SimpleNamespace(violations=[]),
         to_stats=lambda _initial: None,
     )
 
@@ -313,7 +314,7 @@ async def test_legacy_direct_improve_restores_unapproved_narrative_before_save(
     assert data["resume_preview"]["workExperience"][0]["description"][0] == (
         "Built Python APIs"
     )
-    assert any(
+    assert not any(
         warning.startswith("GROUNDING_REVIEW_REQUIRED:") for warning in data["warnings"]
     )
     stored = await isolated_db.get_resume(data["resume_id"])

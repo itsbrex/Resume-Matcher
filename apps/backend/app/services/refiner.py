@@ -111,19 +111,20 @@ async def refine_resume(
                 len(keyword_analysis.injectable_keywords),
                 keyword_analysis.injectable_keywords,
             )
+            before = _deep_copy(current)
             try:
-                before = _deep_copy(current)
-                current = await inject_keywords(
+                candidate = await inject_keywords(
                     current,
                     keyword_analysis.injectable_keywords,
                     master_resume,
                     job_description,
                 )
-                current = finalize_ai_resume(initial_tailored, current)
+                current = finalize_ai_resume(initial_tailored, candidate)
                 if current != before:
                     passes += 1
             except Exception as e:
                 logger.warning("Keyword injection failed: %s", e)
+                current = before
 
     # The keyword writer is the last whole-resume author. Re-apply the source
     # contract immediately after it so later deterministic cleanup and

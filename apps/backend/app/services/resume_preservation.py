@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import re
 from collections import Counter, defaultdict
+from decimal import Decimal, InvalidOperation
 from difflib import SequenceMatcher
 from typing import Any
 
@@ -25,8 +26,9 @@ _PROTECTED_FIELDS: dict[str, tuple[str, ...]] = {
 }
 _TOKEN_RE = re.compile(r"[\w+#./-]+", re.UNICODE)
 _NUMBER_RE = re.compile(
-    r"(?<!\w)(?:[$€£])?\d[\d,]*(?:\.\d+)?"
-    r"(?:\s*(?:thousand|million|billion|percent|times|[kmb%]|x))?(?!\w)",
+    r"(?<![\w.])(?P<currency>[$€£])?(?P<number>\d[\d,]*(?:\.\d+)?)"
+    r"(?:\s*(?P<unit>thousand|million|billion|percent|times|ms|gb|mb|tb|[kmb%x]))?"
+    r"(?![A-Za-z])",
     re.IGNORECASE,
 )
 _STOP_WORDS = frozenset(
@@ -88,7 +90,31 @@ def _matching_source_index(
         for index in sorted(available)
         if _field_identity(source_entries[index], section) == candidate_identity
     ]
-    return matches[0] if len(matches) == 1 else None
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0]
+    candidate_description = candidate.get("description")
+    candidate_text = (
+        " ".join(str(row) for row in candidate_description)
+        if isinstance(candidate_description, list)
+        else str(candidate_description or "")
+    )
+    return max(
+        matches,
+        key=lambda index: (
+            _similarity(
+                " ".join(
+                    str(row)
+                    for row in source_entries[index].get("description", [])
+                )
+                if isinstance(source_entries[index].get("description"), list)
+                else str(source_entries[index].get("description") or ""),
+                candidate_text,
+            ),
+            -index,
+        ),
+    )
 
 
 def _tokens(text: str) -> set[str]:
@@ -114,24 +140,64 @@ def _similarity(left: str, right: str) -> float:
 
 
 def _novel_numbers(source: str, candidate: str) -> bool:
-    def numeric_value(value: str) -> str:
-        normalized = value.casefold().replace(",", "").replace(" ", "")
-        normalized = normalized.translate(str.maketrans("", "", "$€£"))
-        for word, suffix in (
-            ("thousand", "k"),
-            ("million", "m"),
-            ("billion", "b"),
-            ("percent", ""),
-            ("times", ""),
-        ):
-            normalized = normalized.replace(word, suffix)
-        return normalized.removesuffix("%").removesuffix("x")
+    def numeric_claims(text: str) -> Counter[str]:
+        claims: Counter[str] = Counter()
+        for match in _NUMBER_RE.finditer(text):
+            raw_number = match.group("number").replace(",", "")
+            unit = (match.group("unit") or "").casefold()
+            prefix = text[max(0, match.start() - 16) : match.start()].casefold()
+            if re.search(r"(?:python|node(?:\.js)?|java|version|v)\s*$", prefix):
+                continue
+            if not unit and not match.group("currency"):
+                try:
+                    integer = int(raw_number)
+                except ValueError:
+                    integer = 0
+                if 1900 <= integer <= 2100:
+                    continue
+            try:
+                value = Decimal(raw_number)
+            except InvalidOperation:
+                continue
+            scale = {
+                "k": 1_000,
+                "thousand": 1_000,
+                "m": 1_000_000,
+                "million": 1_000_000,
+                "b": 1_000_000_000,
+                "billion": 1_000_000_000,
+            }.get(unit, 1)
+            value *= scale
+            normalized_value = format(value.normalize(), "f")
+            kind = (
+                match.group("currency")
+                or ("%" if unit in {"%", "percent"} else "")
+                or ("x" if unit in {"x", "times"} else "")
+                or (unit if unit in {"ms", "gb", "mb", "tb"} else "")
+            )
+            claims[f"{kind}:{normalized_value}"] += 1
+        return claims
 
-    source_numbers = {numeric_value(value) for value in _NUMBER_RE.findall(source)}
-    candidate_numbers = {
-        numeric_value(value) for value in _NUMBER_RE.findall(candidate)
-    }
-    return bool(candidate_numbers - source_numbers)
+    source_numbers = numeric_claims(source)
+    candidate_numbers = numeric_claims(candidate)
+    return any(
+        count > source_numbers[value] for value, count in candidate_numbers.items()
+    )
+
+
+def _normalized_candidate_rows(value: Any) -> list[str]:
+    """Mirror ResumeData's newline and bullet cleanup before preservation."""
+    if not isinstance(value, list):
+        return []
+    rows: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        for raw_line in re.split(r"\r?\n+", item):
+            line = re.sub(r"^\s*(?:[-*•‣◦▪▫]+|\d+[.)])\s*", "", raw_line).strip()
+            if line:
+                rows.append(line)
+    return rows
 
 
 def _best_source_row(
@@ -153,13 +219,14 @@ def _merge_description_rows(
     candidate_entry: dict[str, Any],
     *,
     allow_review_claims: bool,
+    allow_appended_rows: bool,
 ) -> tuple[list[str], list[str]]:
     source_rows = source_entry.get("description")
     candidate_rows = candidate_entry.get("description")
     if not isinstance(source_rows, list):
         return [], []
     source_text = " ".join(str(row) for row in source_rows)
-    candidate_list = candidate_rows if isinstance(candidate_rows, list) else []
+    candidate_list = _normalized_candidate_rows(candidate_rows)
     source_styles = source_entry.get("descriptionStyles")
     styles = source_styles if isinstance(source_styles, list) else []
     available = set(range(len(source_rows)))
@@ -179,7 +246,7 @@ def _merge_description_rows(
             or _novel_numbers(source_text, candidate_row)
             or (not allow_review_claims and score < _GROUNDING_REVIEW_THRESHOLD)
         )
-        if requires_restore and candidate_index in available:
+        if not candidate_row.strip() and candidate_index in available:
             source_index = candidate_index
         available.remove(source_index)
         source_row = str(source_rows[source_index])
@@ -201,17 +268,28 @@ def _merge_description_rows(
             and styles[source_index] in {"bullet", "plain"}
             else "bullet"
         )
+    if allow_appended_rows:
+        for candidate_row in candidate_list[len(source_rows) :]:
+            if _novel_numbers(source_text, candidate_row):
+                continue
+            merged_rows.append(candidate_row)
+            merged_styles.append("bullet")
     return merged_rows, merged_styles
 
 
 def _description_contract_preserved(
-    source_entry: dict[str, Any], candidate_entry: dict[str, Any]
+    source_entry: dict[str, Any],
+    candidate_entry: dict[str, Any],
+    *,
+    allow_appended_rows: bool = False,
 ) -> bool:
     source_rows = source_entry.get("description")
     candidate_rows = candidate_entry.get("description")
     if not isinstance(source_rows, list):
         return True
-    if not isinstance(candidate_rows, list) or len(candidate_rows) != len(source_rows):
+    if not isinstance(candidate_rows, list) or len(candidate_rows) < len(source_rows):
+        return False
+    if not allow_appended_rows and len(candidate_rows) != len(source_rows):
         return False
     if "descriptionStyles" not in source_entry:
         return True
@@ -223,7 +301,7 @@ def _description_contract_preserved(
         return False
 
     available = set(range(len(source_rows)))
-    for candidate_index, candidate_row in enumerate(candidate_rows):
+    for candidate_index, candidate_row in enumerate(candidate_rows[: len(source_rows)]):
         if not isinstance(candidate_row, str):
             return False
         match = _best_source_row(candidate_row, source_rows, available)
@@ -248,6 +326,7 @@ def _merge_entries(
     section: str,
     *,
     allow_review_claims: bool,
+    allow_appended_rows: bool,
 ) -> list[dict[str, Any]]:
     if not isinstance(source_entries, list):
         return []
@@ -284,6 +363,7 @@ def _merge_entries(
                 source_entry,
                 merged,
                 allow_review_claims=allow_review_claims,
+                allow_appended_rows=allow_appended_rows,
             )
             merged["description"] = rows
             if has_style_metadata:
@@ -293,7 +373,11 @@ def _merge_entries(
         else:
             source_description = source_entry.get("description")
             candidate_description = merged.get("description")
-            if not isinstance(candidate_description, str):
+            if (
+                not isinstance(source_description, str)
+                or not isinstance(candidate_description, str)
+                or not candidate_description.strip()
+            ):
                 merged["description"] = copy.deepcopy(source_description)
             elif isinstance(source_description, str) and _novel_numbers(
                 source_description, candidate_description
@@ -351,6 +435,7 @@ def _merge_custom_sections(
     candidate: Any,
     *,
     allow_review_claims: bool,
+    allow_appended_rows: bool,
 ) -> dict[str, Any]:
     if not isinstance(source, dict):
         return {}
@@ -374,6 +459,7 @@ def _merge_custom_sections(
             candidate_section.get("items"),
             "customItems",
             allow_review_claims=allow_review_claims,
+            allow_appended_rows=allow_appended_rows,
         )
         result[key] = merged_section
     return result
@@ -384,6 +470,7 @@ def finalize_ai_resume(
     candidate: dict[str, Any],
     *,
     allow_review_claims: bool = True,
+    allow_appended_rows: bool = False,
 ) -> dict[str, Any]:
     """Return a non-mutating AI result that preserves the source contract.
 
@@ -411,6 +498,7 @@ def finalize_ai_resume(
             result.get(section),
             section,
             allow_review_claims=allow_review_claims,
+            allow_appended_rows=allow_appended_rows,
         )
     result["additional"] = _merge_additional(
         source.get("additional"), result.get("additional")
@@ -419,6 +507,7 @@ def finalize_ai_resume(
         source.get("customSections"),
         result.get("customSections"),
         allow_review_claims=allow_review_claims,
+        allow_appended_rows=allow_appended_rows,
     )
     if "sectionMeta" in source:
         result["sectionMeta"] = copy.deepcopy(source["sectionMeta"])
@@ -437,7 +526,10 @@ def _entry_map(
 
 
 def validate_confirmed_resume(
-    source: dict[str, Any], candidate: dict[str, Any]
+    source: dict[str, Any],
+    candidate: dict[str, Any],
+    *,
+    allow_appended_rows: bool = False,
 ) -> list[str]:
     """Return stable source-contract violation codes for a confirm payload."""
     violations: list[str] = []
@@ -466,7 +558,9 @@ def validate_confirmed_resume(
                 ):
                     violations.append(f"{section}.identity")
                     break
-                if not _description_contract_preserved(source_entry, candidate_entry):
+                if not _description_contract_preserved(
+                    source_entry, candidate_entry, allow_appended_rows=allow_appended_rows
+                ):
                     violations.append(f"{section}.descriptions")
                     break
 
@@ -518,7 +612,8 @@ def validate_confirmed_resume(
                         violations.append(f"customSections.{key}.identity")
                         break
                     if not _description_contract_preserved(
-                        source_entry, candidate_entry
+                        source_entry, candidate_entry,
+                        allow_appended_rows=allow_appended_rows,
                     ):
                         violations.append(f"customSections.{key}.descriptions")
                         break
@@ -545,7 +640,9 @@ def validate_confirmed_resume(
                 for item in candidate_dict.get(field, [])
                 if isinstance(item, str)
             )
-            if source_items - candidate_items:
+            missing = source_items - candidate_items
+            extras = candidate_items - source_items
+            if missing or (field != "technicalSkills" and extras):
                 violations.append(f"additional.{field}")
     return list(dict.fromkeys(violations))
 
@@ -561,16 +658,20 @@ def _entry_grounding_warnings(
     path_prefix: str,
 ) -> list[str]:
     warnings: list[str] = []
-    source_map = _entry_map(source_entries, section)
-    if not isinstance(candidate_entries, list):
+    if not isinstance(source_entries, list) or not isinstance(candidate_entries, list):
         return warnings
+    source_dicts = [entry for entry in source_entries if isinstance(entry, dict)]
+    available_entries = set(range(len(source_dicts)))
     for candidate_index, candidate_entry in enumerate(candidate_entries):
         if not isinstance(candidate_entry, dict):
             continue
-        bucket = source_map.get(_identity(candidate_entry, section))
-        if not bucket:
+        source_index = _matching_source_index(
+            candidate_entry, source_dicts, available_entries, section
+        )
+        if source_index is None:
             continue
-        source_entry = bucket.pop(0)
+        available_entries.remove(source_index)
+        source_entry = source_dicts[source_index]
         source_description = source_entry.get("description")
         candidate_description = candidate_entry.get("description")
         description_path = f"{path_prefix}[{candidate_index}].description"
@@ -588,17 +689,39 @@ def _entry_grounding_warnings(
             candidate_description, list
         ):
             continue
+        available_rows = set(range(len(source_description)))
+        row_assignments: dict[int, tuple[int, float]] = {}
         for row_index, row in enumerate(candidate_description):
             if not isinstance(row, str):
+                continue
+            exact = next(
+                (
+                    source_index
+                    for source_index in sorted(available_rows)
+                    if _normalized(source_description[source_index]) == _normalized(row)
+                ),
+                None,
+            )
+            if exact is not None:
+                row_assignments[row_index] = (exact, 1.0)
+                available_rows.remove(exact)
+        for row_index, row in enumerate(candidate_description):
+            if not isinstance(row, str) or row_index in row_assignments:
                 continue
             match = _best_source_row(
                 row,
                 source_description,
-                set(range(len(source_description))),
+                available_rows,
             )
             if match is None:
                 continue
             source_index, score = match
+            available_rows.remove(source_index)
+            row_assignments[row_index] = (source_index, score)
+        for row_index, row in enumerate(candidate_description):
+            if not isinstance(row, str) or row_index not in row_assignments:
+                continue
+            source_index, score = row_assignments[row_index]
             if (
                 _normalized(row) != _normalized(source_description[source_index])
                 and score < _GROUNDING_REVIEW_THRESHOLD

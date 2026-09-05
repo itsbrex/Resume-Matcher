@@ -657,3 +657,40 @@ async def test_legacy_preview_without_structured_source_requires_reprocessing(is
     response = await confirmation_client.post("/api/v1/resumes/improve/confirm", json={"resume_id": source["resume_id"], "job_id": job["job_id"], "preview_id": preview["preview_id"], "improved_data": candidate, "improvements": []})
     assert response.status_code == 400, response.text
     assert len(await isolated_db.list_resumes()) == 1
+
+
+@pytest.mark.parametrize(
+    ("appended_text", "retained"),
+    [
+        ("Built Python automation", True),
+        ("Generated $990000 in new revenue", False),
+    ],
+)
+async def test_verified_description_append_survives_preview_and_confirmation(
+    isolated_db: Database,
+    confirmation_client: AsyncClient,
+    sample_resume: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    appended_text: str,
+    retained: bool,
+) -> None:
+    monkeypatch.setattr(
+        resumes,
+        "generate_resume_diffs",
+        AsyncMock(return_value=ImproveDiffResult(changes=[ResumeChange(
+            path="workExperience[0].description",
+            action="append",
+            value=appended_text,
+            reason="Summarize relevant source experience",
+        )])),
+    )
+    payload = await preview_payload(isolated_db, confirmation_client, sample_resume)
+    descriptions = payload["improved_data"]["workExperience"][0]["description"]
+    assert (appended_text in descriptions) is retained
+    response = await confirmation_client.post(
+        "/api/v1/resumes/improve/confirm", json=payload
+    )
+    assert response.status_code == 200, response.text
+    saved = await isolated_db.get_resume(response.json()["data"]["resume_id"])
+    assert saved is not None
+    assert saved["processed_data"]["workExperience"][0]["description"] == descriptions

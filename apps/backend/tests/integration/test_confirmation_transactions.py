@@ -519,7 +519,14 @@ async def test_timed_out_generation_releases_claim_and_creates_no_required_rows(
     monkeypatch.setattr(resumes.settings, "request_timeout_seconds", 1)
 
     async def title(*_args: Any, **_kwargs: Any) -> str:
-        await asyncio.Event().wait()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            # Optional generation now has its own earlier deadline. Simulate a
+            # provider cleanup that outlasts that reserve to reach the actual
+            # request deadline, retaining the original no-orphan assertions.
+            await asyncio.sleep(0.4)
+            raise
         return "unreachable"
 
     monkeypatch.setattr(resumes, "generate_resume_title", title)
@@ -698,3 +705,29 @@ async def test_verified_description_append_survives_preview_and_confirmation(
     saved = await isolated_db.get_resume(response.json()["data"]["resume_id"])
     assert saved is not None
     assert saved["processed_data"]["workExperience"][0]["description"] == descriptions
+
+
+async def test_optional_title_timeout_can_still_commit_required_resume(
+    isolated_db: Database,
+    confirmation_client: AsyncClient,
+    sample_resume: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = await preview_payload(isolated_db, confirmation_client, sample_resume)
+    monkeypatch.setattr(resumes.settings, "request_timeout_seconds", 1)
+
+    async def stalled_title(*_args: Any, **_kwargs: Any) -> str:
+        await asyncio.Event().wait()
+        return "unreachable"
+
+    monkeypatch.setattr(resumes, "generate_resume_title", stalled_title)
+    response = await confirmation_client.post(
+        "/api/v1/resumes/improve/confirm", json=payload
+    )
+    assert response.status_code == 200, response.text
+    assert "Title generation failed" in response.json()["data"]["warnings"]
+    assert len(await isolated_db.list_resumes()) == 2
+    replay = await confirmation_client.post(
+        "/api/v1/resumes/improve/confirm", json=payload
+    )
+    assert replay.json() == response.json()

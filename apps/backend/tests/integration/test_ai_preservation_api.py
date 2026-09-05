@@ -10,6 +10,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.main import app
 from app.schemas.models import ResumeData
+from app.schemas.models import RefinementStats
 from tests.integration.test_pipeline_e2e import _upload_resume
 
 
@@ -322,6 +323,47 @@ async def test_legacy_direct_improve_restores_unapproved_narrative_before_save(
     assert stored["processed_data"]["workExperience"][0]["description"][0] == (
         "Built Python APIs"
     )
+
+
+async def test_preview_metrics_count_only_keywords_in_finalized_resume(
+    isolated_db: Any, sample_resume: dict[str, Any]
+) -> None:
+    source = ResumeData.model_validate(copy.deepcopy(sample_resume)).model_dump()
+    source["workExperience"][0]["description"][0] = "Built Python APIs"
+    candidate = copy.deepcopy(source)
+    candidate["workExperience"][0]["description"][0] = "Improved throughput by 500%"
+    resume_id, job_id = await _seed(isolated_db, source)
+    refinement = SimpleNamespace(
+        refined_data=candidate,
+        passes_completed=1,
+        ai_phrases_removed=[],
+        keyword_analysis=None,
+        keywords_applied=["500%"],
+        final_match_percentage=99.0,
+        alignment_report=SimpleNamespace(violations=[]),
+        to_stats=lambda initial: RefinementStats(
+            passes_completed=1,
+            passes_attempted=1,
+            keywords_injected=1,
+            initial_match_percentage=initial,
+            final_match_percentage=99.0,
+        ),
+    )
+
+    with ExitStack() as stack:
+        for pipeline_patch in _pipeline_patches(source, refinement):
+            stack.enter_context(pipeline_patch)
+        async with _client() as client:
+            response = await client.post(
+                "/api/v1/resumes/improve/preview",
+                json={"resume_id": resume_id, "job_id": job_id},
+            )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert "500%" not in str(data["resume_preview"])
+    assert data["refinement_stats"]["keywords_injected"] == 0
+    assert data["refinement_stats"]["final_match_percentage"] != 99.0
 
 
 async def test_preview_warning_allows_explicit_confirmation_of_narrative_rewrite(

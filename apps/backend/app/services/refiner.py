@@ -49,6 +49,12 @@ def _keyword_in_text(keyword: str, text: str) -> bool:
     return bool(re.search(pattern, text.lower()))
 
 
+def count_retained_keywords(keywords: list[str], resume: dict[str, Any]) -> int:
+    """Count refinement keywords still present in the finalized resume."""
+    text = _extract_all_text(resume)
+    return sum(_keyword_in_text(keyword, text) for keyword in keywords)
+
+
 def _normalize_skill_key(skill: str) -> str:
     """Normalize a skill for case-insensitive comparisons."""
     return re.sub(r"\s+", " ", skill.strip()).casefold()

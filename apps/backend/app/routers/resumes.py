@@ -75,7 +75,11 @@ from app.services.improver import (
     verify_skill_target_plan,
     verify_diff_result,
 )
-from app.services.refiner import refine_resume, calculate_keyword_match
+from app.services.refiner import (
+    calculate_keyword_match,
+    count_retained_keywords,
+    refine_resume,
+)
 from app.services.resume_preservation import (
     finalize_ai_resume,
     grounding_review_warnings,
@@ -1261,6 +1265,17 @@ async def _improve_preview_flow(
         response_warnings.extend(
             grounding_review_warnings(original_resume_data, improved_data)
         )
+        if refinement_stats is not None and refinement_result is not None:
+            refinement_stats = refinement_stats.model_copy(
+                update={
+                    "keywords_injected": count_retained_keywords(
+                        refinement_result.keywords_applied, improved_data
+                    ),
+                    "final_match_percentage": calculate_keyword_match(
+                        improved_data, job_keywords
+                    ),
+                }
+            )
 
     progress["stage"] = "register_preview"
     improved_text = json.dumps(improved_data, indent=2)
@@ -1643,6 +1658,17 @@ async def improve_resume_endpoint(
             response_warnings.extend(
                 grounding_review_warnings(original_resume_data, improved_data)
             )
+            if refinement_stats is not None and refinement_result is not None:
+                refinement_stats = refinement_stats.model_copy(
+                    update={
+                        "keywords_injected": count_retained_keywords(
+                            refinement_result.keywords_applied, improved_data
+                        ),
+                        "final_match_percentage": calculate_keyword_match(
+                            improved_data, job_keywords
+                        ),
+                    }
+                )
 
         # Convert improved data to JSON string for storage
         improved_text = json.dumps(improved_data, indent=2)

@@ -60,7 +60,7 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return !Array.isArray(value);
 }
 
-function isResumeDataShape(value: unknown): value is ResumeData {
+export function isResumeDataShape(value: unknown): value is ResumeData {
   if (!isObjectRecord(value)) {
     return false;
   }

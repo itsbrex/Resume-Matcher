@@ -59,6 +59,7 @@ import {
   getResumeDraftStorageKey,
   LEGACY_RESUME_DRAFT_STORAGE_KEY,
   parseResumeDraft,
+  isResumeDataShape,
   safeStorage,
   shouldPromptForDraftRestore,
   type ResumeDraftEnvelope,
@@ -231,6 +232,14 @@ const ResumeBuilderContent = () => {
   const syncedVersionRef = useRef(0);
   const resumeSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const unsyncedSinceRef = useRef<number | null>(null);
+  const documentIsActiveRef = useRef(true);
+
+  useEffect(() => {
+    documentIsActiveRef.current = true;
+    return () => {
+      documentIsActiveRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (resumeId || hasUnsavedChanges || improvedPreview) {
@@ -417,8 +426,12 @@ const ResumeBuilderContent = () => {
           setInterviewPrep(data.interview_prep ?? null);
           setInterviewPrepError(null);
           // Prefer processed_resume if available
-          if (data.processed_resume) {
-            const serverData = data.processed_resume as ResumeData;
+          if (data.raw_resume?.processing_status && data.raw_resume.processing_status !== 'ready') {
+            setLoadingState('error');
+            return;
+          }
+          if (isResumeDataShape(data.processed_resume)) {
+            const serverData = data.processed_resume;
             const localDraft = readStoredResumeDraft(resumeId);
             setResumeData(serverData);
             setLastSavedData(serverData);
@@ -437,8 +450,12 @@ const ResumeBuilderContent = () => {
           // Fallback to parsing raw content
           if (data.raw_resume?.content) {
             try {
-              const parsed = JSON.parse(data.raw_resume.content);
-              const serverData = parsed as ResumeData;
+              const parsed: unknown = JSON.parse(data.raw_resume.content);
+              if (!isResumeDataShape(parsed)) {
+                setLoadingState('error');
+                return;
+              }
+              const serverData = parsed;
               const localDraft = readStoredResumeDraft(resumeId);
               setResumeData(serverData);
               setLastSavedData(serverData);
@@ -457,6 +474,12 @@ const ResumeBuilderContent = () => {
               // Raw content is markdown, not JSON
             }
           }
+          // A successful HTTP response is not necessarily an editable resume.
+          // Keep drafts intact until a usable server baseline can be read and
+          // the user explicitly chooses to restore. Context may belong to a
+          // different resume and must never replace this ID's failed snapshot.
+          setLoadingState('error');
+          return;
         } catch (err) {
           if (cancelled) return;
           // Do NOT fall through to the localStorage draft restore below. That
@@ -494,7 +517,7 @@ const ResumeBuilderContent = () => {
       if (savedDraft) {
         setResumeData(savedDraft.data);
         setLastSavedData(savedDraft.data);
-        setHasUnsavedChanges(true); // Mark as unsaved since it's a draft
+        setHasUnsavedChanges(true); // This path only handles a new, unsaved resume.
         editVersionRef.current += 1;
         unsyncedSinceRef.current = Date.now();
         setLoadingState('loaded');
@@ -583,7 +606,12 @@ const ResumeBuilderContent = () => {
         .catch(() => {
           // Keep the queue alive after a failed save so the next edit can still persist.
         })
-        .then(() => updateResume(resumeId, canonicalPayload));
+        .then(() => {
+          if (!documentIsActiveRef.current) {
+            throw new DOMException('Editor closed', 'AbortError');
+          }
+          return updateResume(resumeId, canonicalPayload);
+        });
 
       resumeSaveQueueRef.current = runSave.then(
         () => undefined,
@@ -629,6 +657,7 @@ const ResumeBuilderContent = () => {
       unsyncedSinceRef.current = Date.now();
       try {
         const { response, canonicalPayload } = await queueResumeSave(editorSnapshot);
+        if (!documentIsActiveRef.current) return;
         // Prefer the server's copy: it may rewrite the payload (e.g. aligning
         // descriptionStyles), and comparing a stale client payload against the
         // server state would surface a spurious draft-recovery prompt on reload.
@@ -643,10 +672,11 @@ const ResumeBuilderContent = () => {
           clearStoredResumeDraft(resumeId);
         }
       } catch (error) {
+        if (!documentIsActiveRef.current) return;
         console.error('Failed to auto-save resume:', error);
         setAutoSaveError(t('builder.alerts.autoSaveFailed'));
       } finally {
-        setIsAutoSaving(false);
+        if (documentIsActiveRef.current) setIsAutoSaving(false);
       }
     }, saveDelay);
 
@@ -683,6 +713,7 @@ const ResumeBuilderContent = () => {
         const versionAtFlush = editVersionRef.current;
         const editorSnapshot = resumeData;
         const { response, canonicalPayload } = await queueResumeSave(editorSnapshot);
+        if (!documentIsActiveRef.current) return false;
         setLastSavedData((response?.processed_resume as ResumeData) ?? canonicalPayload);
         setAutoSaveError(null);
 
@@ -700,6 +731,7 @@ const ResumeBuilderContent = () => {
 
         return false;
       } catch (error) {
+        if (!documentIsActiveRef.current) return false;
         console.error('Failed to save resume:', error);
         setAutoSaveError(t('builder.alerts.autoSaveFailed'));
         if (showErrorDialog) {
@@ -707,7 +739,7 @@ const ResumeBuilderContent = () => {
         }
         return false;
       } finally {
-        setIsSaving(false);
+        if (documentIsActiveRef.current) setIsSaving(false);
       }
     },
     [
@@ -1576,11 +1608,18 @@ const ResumeBuilderContent = () => {
   );
 };
 
+const ResumeBuilderDocument = () => {
+  const searchParams = useSearchParams();
+  // Query-only navigation can retain this page. Remount the editor at the
+  // document boundary so every baseline, queue and draft belongs to one ID.
+  return <ResumeBuilderContent key={searchParams.get('id') ?? 'new'} />;
+};
+
 export const ResumeBuilder = () => {
   const { t } = useTranslations();
   return (
     <Suspense fallback={<div>{t('common.loading')}</div>}>
-      <ResumeBuilderContent />
+      <ResumeBuilderDocument />
     </Suspense>
   );
 };

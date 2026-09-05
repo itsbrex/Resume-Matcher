@@ -261,7 +261,9 @@ def _restore_original_dates(
         for idx, orig_entry in enumerate(orig_entries):
             if idx >= len(result_entries):
                 break
-            if not isinstance(orig_entry, dict) or not isinstance(result_entries[idx], dict):
+            if not isinstance(orig_entry, dict) or not isinstance(
+                result_entries[idx], dict
+            ):
                 continue
             orig_years = orig_entry.get("years", "")
             result_years = result_entries[idx].get("years", "")
@@ -299,7 +301,9 @@ def _restore_original_dates(
             for idx, orig_item in enumerate(orig_items):
                 if idx >= len(result_items):
                     break
-                if not isinstance(orig_item, dict) or not isinstance(result_items[idx], dict):
+                if not isinstance(orig_item, dict) or not isinstance(
+                    result_items[idx], dict
+                ):
                     continue
                 orig_years = orig_item.get("years", "")
                 result_years = result_items[idx].get("years", "")
@@ -715,8 +719,14 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
                 f"and extracted text is {MAX_EXTRACTED_TEXT_BYTES // (1024 * 1024)}MB."
             ),
         )
+    except TimeoutError as e:
+        logger.warning("Document conversion exceeded its deadline")
+        raise HTTPException(
+            status_code=504,
+            detail="Document conversion timed out. Please try a simpler document.",
+        ) from e
     except Exception as e:
-        logger.error(f"Document parsing failed: {e}")
+        logger.exception("Document parsing failed")
         raise HTTPException(
             status_code=422,
             detail="Failed to parse document. Please upload a valid PDF, DOC, or DOCX file.",
@@ -1001,9 +1011,7 @@ async def _improve_preview_flow(
             accepted_targets = verified_skill_plan.get("accepted", [])
             if isinstance(accepted_targets, list):
                 skill_targets = [
-                    target
-                    for target in accepted_targets
-                    if isinstance(target, dict)
+                    target for target in accepted_targets if isinstance(target, dict)
                 ]
             rejected_targets = verified_skill_plan.get("rejected", [])
             if isinstance(rejected_targets, list) and rejected_targets:
@@ -1442,7 +1450,9 @@ async def improve_resume_endpoint(
         improved_data = _restore_original_dates(original_resume_data, improved_data)
         original_markdown = _get_original_markdown(resume)
         if original_markdown:
-            improved_data = restore_dates_from_markdown(improved_data, original_markdown)
+            improved_data = restore_dates_from_markdown(
+                improved_data, original_markdown
+            )
         improved_data = _preserve_original_skills(original_resume_data, improved_data)
         improved_data = _protect_custom_sections(original_resume_data, improved_data)
 
@@ -1771,8 +1781,9 @@ async def retry_processing(resume_id: str) -> ResumeUploadResponse:
         raise HTTPException(status_code=404, detail="Resume not found")
 
     status = resume.get("processing_status")
-    can_retry_legacy_empty_ready = status == "ready" and not has_meaningful_resume_content(
-        resume.get("processed_data") or {}
+    can_retry_legacy_empty_ready = (
+        status == "ready"
+        and not has_meaningful_resume_content(resume.get("processed_data") or {})
     )
     if status not in ("failed", "processing") and not can_retry_legacy_empty_ready:
         raise HTTPException(

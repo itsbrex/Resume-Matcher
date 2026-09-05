@@ -1,15 +1,6 @@
 """SQLite processing-token migration and compare-and-set tests."""
 
-import atexit
-import os
-import shutil
-import tempfile
 from pathlib import Path
-
-_ISOLATED_ROOT = Path(tempfile.mkdtemp(prefix="resume-matcher-stage08-db-"))
-atexit.register(shutil.rmtree, _ISOLATED_ROOT, ignore_errors=True)
-os.environ["DATA_DIR"] = str(_ISOLATED_ROOT / "data")
-os.environ["CONFIG_FILE_PATH"] = str(_ISOLATED_ROOT / "config.json")
 
 from app.database import Database
 from app.db_engine import init_models_sync, make_sync_engine
@@ -34,9 +25,11 @@ def test_processing_token_migration_is_idempotent(tmp_path: Path) -> None:
         init_models_sync(engine)
 
         with engine.begin() as connection:
-            columns = connection.exec_driver_sql(
-                "PRAGMA table_info(resumes)"
-            ).mappings().all()
+            columns = (
+                connection.exec_driver_sql("PRAGMA table_info(resumes)")
+                .mappings()
+                .all()
+            )
         names = [column["name"] for column in columns]
         assert names.count("processing_token") == 1
     finally:
@@ -70,5 +63,54 @@ async def test_only_latest_processing_token_can_finish(tmp_path: Path) -> None:
         assert stored is not None
         assert stored["processing_status"] == "failed"
         assert stored["processed_data"] is None
+    finally:
+        await database.close()
+
+
+async def test_failed_processing_clears_previous_structured_data(
+    tmp_path: Path,
+) -> None:
+    database = Database(db_path=tmp_path / "failed.db")
+    try:
+        row = await database.create_resume(
+            content="old", processing_status="failed", processed_data={"summary": "old"}
+        )
+        token = await database.claim_resume_processing(row["resume_id"])
+        assert token is not None
+        assert (
+            await database.finish_resume_processing(
+                row["resume_id"], token, processing_status="failed"
+            )
+            == "committed"
+        )
+        stored = await database.get_resume(row["resume_id"])
+        assert stored is not None and stored["processed_data"] is None
+    finally:
+        await database.close()
+
+
+async def test_user_save_supersedes_active_processing(tmp_path: Path) -> None:
+    database = Database(db_path=tmp_path / "edit.db")
+    try:
+        row = await database.create_resume(content="old", processing_status="failed")
+        token = await database.claim_resume_processing(row["resume_id"])
+        assert token is not None
+        await database.update_resume(
+            row["resume_id"],
+            {"processing_status": "ready", "processed_data": {"summary": "user edit"}},
+        )
+        assert (
+            await database.finish_resume_processing(
+                row["resume_id"],
+                token,
+                processing_status="ready",
+                processed_data={"summary": "late parser"},
+            )
+            == "stale"
+        )
+        stored = await database.get_resume(row["resume_id"])
+        assert stored is not None and stored["processed_data"] == {
+            "summary": "user edit"
+        }
     finally:
         await database.close()

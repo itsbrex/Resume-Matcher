@@ -35,7 +35,7 @@ from pdfminer.pdftypes import (
     apply_tiff_predictor,
     int_value,
 )
-from pdfminer.psparser import PSKeyword
+from pdfminer.psparser import PSKeyword, literal_name
 
 from app.llm import complete_json, get_llm_config, get_model_name, get_safe_max_tokens
 from app.prompts import PARSE_RESUME_PROMPT
@@ -52,6 +52,8 @@ MAX_EXTRACTED_TEXT_BYTES = 2 * 1024 * 1024
 MAX_PDF_SCANLINE_COLUMNS = 32_768
 MAX_PDF_SCANLINE_BYTES = 256 * 1024
 DOCUMENT_CONVERSION_WORKERS = 2
+DOCUMENT_CONVERSION_TIMEOUT_SECONDS = 120.0
+_DOCUMENT_BACKGROUND_WORKERS: set[asyncio.Task[str]] = set()
 _DOCUMENT_CONVERSION_LIMITER = anyio.CapacityLimiter(DOCUMENT_CONVERSION_WORKERS)
 
 
@@ -107,6 +109,8 @@ def _decode_flate_bounded(data: bytes, limit: int) -> bytes:
             _append_pdf_output(output, chunk, limit)
             pending = decoder.unconsumed_tail
     _append_pdf_output(output, decoder.flush(limit - len(output) + 1), limit)
+    if not decoder.eof:
+        raise ValueError("Truncated FlateDecode stream")
     return bytes(output)
 
 
@@ -324,7 +328,10 @@ def _validate_pdf_container(path: Path) -> None:
                     seen.add(object_id)
                     value = document.getobj(object_id)
                     if isinstance(value, PDFStream):
-                        value.get_data()
+                        # Text extraction never decodes image XObjects. Their
+                        # optional codecs must not reject otherwise readable text.
+                        if literal_name(value.attrs.get("Subtype")) != "Image":
+                            value.get_data()
     except DocumentResourceLimitError:
         raise
     except Exception as exc:
@@ -447,6 +454,7 @@ def _validate_extracted_text(text: str) -> None:
                 "Document extracted text exceeds the 2MB processing limit."
             )
 
+
 # Matches date ranges like "Jan 2020 - Dec 2023", "May 2021 - Present",
 # "January 2020 - Current", and single dates like "Jun 2023".
 _MD_DATE_RE = re.compile(
@@ -549,7 +557,16 @@ def restore_dates_from_markdown(
 
 
 _NON_CONTENT_RESUME_KEYS = frozenset(
-    {"id", "sectionType", "descriptionStyles", "isDefault", "isVisible", "order", "key", "displayName"}
+    {
+        "id",
+        "sectionType",
+        "descriptionStyles",
+        "isDefault",
+        "isVisible",
+        "order",
+        "key",
+        "displayName",
+    }
 )
 # Depth guard against self-referential or pathological LLM output.  Recursion
 # starts at depth 0 on a *top-level section value*, so the deepest user-visible
@@ -588,8 +605,7 @@ def _has_meaningful_resume_value(
         return bool(value.strip())
     if isinstance(value, list):
         return any(
-            _has_meaningful_resume_value(item, depth=depth + 1)
-            for item in value
+            _has_meaningful_resume_value(item, depth=depth + 1) for item in value
         )
     if isinstance(value, dict):
         return any(
@@ -679,14 +695,25 @@ async def parse_document(content: bytes, filename: str) -> str:
         )
     )
     try:
-        return await asyncio.shield(worker)
-    except asyncio.CancelledError:
-        try:
-            await asyncio.shield(worker)
-        except Exception:
-            # The request was already cancelled; consume the worker error after
-            # its tempfile cleanup rather than replacing cancellation.
-            logger.exception("Document conversion failed after request cancellation")
+        return await asyncio.wait_for(
+            asyncio.shield(worker), timeout=DOCUMENT_CONVERSION_TIMEOUT_SECONDS
+        )
+    except (asyncio.CancelledError, TimeoutError):
+        # Threads cannot be killed safely. Return on the caller's deadline while
+        # the worker retains its limiter slot and owns its tempfile until done.
+        _DOCUMENT_BACKGROUND_WORKERS.add(worker)
+
+        def consume_result(done: asyncio.Task[str]) -> None:
+            _DOCUMENT_BACKGROUND_WORKERS.discard(done)
+            if not done.cancelled():
+                try:
+                    done.result()
+                except Exception:
+                    logger.exception(
+                        "Document conversion failed after request cancellation"
+                    )
+
+        worker.add_done_callback(consume_result)
         raise
 
 

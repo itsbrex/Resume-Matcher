@@ -97,7 +97,9 @@ class Database:
         if self._initialized:
             return
         self._sync_engine = make_sync_engine(self.db_path)
-        self._sync_session_factory = sessionmaker(self._sync_engine, expire_on_commit=False)
+        self._sync_session_factory = sessionmaker(
+            self._sync_engine, expire_on_commit=False
+        )
         init_models_sync(self._sync_engine)
         self._async_engine = make_async_engine(self.db_path)
         self._async_session_factory = async_sessionmaker(
@@ -324,7 +326,9 @@ class Database:
             row = result.scalars().first()
             return self._resume_to_dict(row) if row else None
 
-    async def update_resume(self, resume_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+    async def update_resume(
+        self, resume_id: str, updates: dict[str, Any]
+    ) -> dict[str, Any]:
         """Update resume by ID.
 
         Raises:
@@ -404,8 +408,9 @@ class Database:
             "processing_token": None,
             "updated_at": _now(),
         }
-        if processing_status == "ready":
-            values["processed_data"] = processed_data
+        values["processed_data"] = (
+            processed_data if processing_status == "ready" else None
+        )
 
         async with self._session() as session:
             result = await session.execute(
@@ -413,6 +418,7 @@ class Database:
                 .where(
                     Resume.resume_id == resume_id,
                     Resume.processing_token == token,
+                    Resume.processing_status == "processing",
                 )
                 .values(**values)
             )
@@ -659,7 +665,9 @@ class Database:
                 raise
             return self._application_to_dict(row)
 
-    async def list_applications(self, status: str | None = None) -> list[dict[str, Any]]:
+    async def list_applications(
+        self, status: str | None = None
+    ) -> list[dict[str, Any]]:
         """List applications ordered by (status, position)."""
         async with self._session() as session:
             stmt = select(Application)

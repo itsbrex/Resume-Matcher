@@ -149,3 +149,5 @@ uv run uvicorn app.main:app --reload --port 8000
 1. Create router in `app/routers/`
 2. Add Pydantic models to `app/schemas/models.py`
 3. Register router in `app/main.py`
+
+Legacy `.doc` files pass compound-file header validation, but the bundled MarkItDown DOCX converter does not guarantee binary Word conversion. Convert legacy Word documents to PDF or DOCX for reliable upload.

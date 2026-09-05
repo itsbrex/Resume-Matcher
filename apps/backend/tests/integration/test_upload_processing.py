@@ -1,20 +1,11 @@
 """Real API/SQLite coverage for bounded upload processing ownership."""
 
-import atexit
 import asyncio
 import copy
 import io
-import os
-import shutil
-import tempfile
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
-
-_ISOLATED_ROOT = Path(tempfile.mkdtemp(prefix="resume-matcher-stage08-api-"))
-atexit.register(shutil.rmtree, _ISOLATED_ROOT, ignore_errors=True)
-os.environ["DATA_DIR"] = str(_ISOLATED_ROOT / "data")
-os.environ["CONFIG_FILE_PATH"] = str(_ISOLATED_ROOT / "config.json")
 
 import pytest
 from docx import Document
@@ -51,7 +42,11 @@ def _pdf_bytes(text: str = "") -> bytes:
             b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>"
         ),
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-        b"<< /Length " + str(len(content)).encode() + b" >>\nstream\n" + content + b"\nendstream",
+        b"<< /Length "
+        + str(len(content)).encode()
+        + b" >>\nstream\n"
+        + content
+        + b"\nendstream",
     ]
     pdf = bytearray(b"%PDF-1.4\n")
     offsets = [0]
@@ -461,3 +456,18 @@ async def test_failed_retry_can_recover_with_a_new_successful_generation(
     assert stored is not None
     assert stored["processing_status"] == "ready"
     assert stored["processed_data"] == sample_resume
+
+
+async def test_docx_expansion_limit_returns_413(client: AsyncClient) -> None:
+    document = _docx_bytes("A" * (17 * 1024 * 1024))
+    response = await client.post(
+        "/api/v1/resumes/upload",
+        files={
+            "file": (
+                "large.docx",
+                document,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+    assert response.status_code == 413

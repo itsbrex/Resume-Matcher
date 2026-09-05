@@ -124,3 +124,5 @@ export const PROVIDER_INFO = {
 ```typescript
 import { fetchResume, API_BASE, PROVIDER_INFO } from '@/lib/api';
 ```
+
+Legacy `.doc` files pass compound-file header validation, but the bundled MarkItDown DOCX converter does not guarantee binary Word conversion. Convert legacy Word documents to PDF or DOCX for reliable upload.

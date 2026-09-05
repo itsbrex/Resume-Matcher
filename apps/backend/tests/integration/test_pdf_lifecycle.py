@@ -436,3 +436,87 @@ async def test_detached_worker_failure_is_logged_server_side(
     assert "Detached PDF fallback worker failed" in caplog.text
     assert "synthetic detached worker failure" in caplog.text
     assert pdf_module._active_renders == 0
+
+
+async def test_non_timeout_page_close_failure_retires_browser(monkeypatch: pytest.MonkeyPatch) -> None:
+    release = asyncio.Event()
+    closing = asyncio.Event()
+
+    class BrokenPage(ControlledPage):
+        async def close(self) -> None:
+            raise PlaywrightError("synthetic page close failure")
+
+    class SlowBrowser(ControlledBrowser):
+        async def close(self) -> None:
+            closing.set()
+            await release.wait()
+            self.connected = False
+
+    browser = SlowBrowser(BrokenPage)
+    monkeypatch.setattr(pdf_module, "_browser", browser)
+    monkeypatch.setattr(pdf_module, "_PDF_MAX_CONCURRENCY", 1)
+    try:
+        with pytest.raises(pdf_module.PDFRenderError):
+            await pdf_module.render_resume_pdf("data:text/html,close-error")
+        assert pdf_module._browser is None
+        assert pdf_module._active_renders == 1
+        with pytest.raises(pdf_module.PDFRenderOverloadedError):
+            await pdf_module.render_resume_pdf("data:text/html,no-capacity")
+    finally:
+        release.set()
+        for _ in range(100):
+            if pdf_module._active_renders == 0:
+                break
+            await asyncio.sleep(0.01)
+
+
+async def test_cancelled_stale_browser_cleanup_keeps_owner(monkeypatch: pytest.MonkeyPatch) -> None:
+    release = asyncio.Event()
+    entered = asyncio.Event()
+    stopped = asyncio.Event()
+
+    class StaleBrowser(ControlledBrowser):
+        async def close(self) -> None:
+            entered.set()
+            await release.wait()
+            stopped.set()
+
+    browser = StaleBrowser(ControlledPage)
+    browser.connected = False
+    monkeypatch.setattr(pdf_module, "_browser", browser)
+    monkeypatch.setattr(pdf_module, "_PDF_MAX_CONCURRENCY", 1)
+    task = asyncio.create_task(pdf_module.render_resume_pdf("data:text/html,stale"))
+    await asyncio.wait_for(entered.wait(), 1)
+    task.cancel()
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert pdf_module._active_renders == 1
+        assert not stopped.is_set()
+    finally:
+        release.set()
+        for _ in range(100):
+            if stopped.is_set() and pdf_module._active_renders == 0:
+                break
+            await asyncio.sleep(0.01)
+    assert stopped.is_set() and pdf_module._active_renders == 0
+
+
+async def test_thread_fallback_inherits_remaining_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+    deadlines: list[float] = []
+    started = time.monotonic()
+    monkeypatch.setattr(pdf_module, "_PDF_RENDER_TIMEOUT_SECONDS", 0.3)
+
+    async def unsupported(*args: Any) -> bytes:
+        await asyncio.sleep(0.1)
+        raise NotImplementedError
+
+    def worker(url: str, selector: str, pdf_format: str, margins: dict[str, Any], deadline: float) -> bytes:
+        deadlines.append(deadline)
+        return b"%PDF"
+
+    monkeypatch.setattr(pdf_module, "_render_on_shared_browser", unsupported)
+    monkeypatch.setattr(pdf_module, "_render_resume_pdf_sync", worker)
+    assert await pdf_module.render_resume_pdf("data:text/html,fallback") == b"%PDF"
+    assert deadlines[0] - started < 0.35

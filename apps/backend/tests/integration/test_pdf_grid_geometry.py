@@ -50,6 +50,9 @@ async def test_two_column_css_fits_real_pdf_widths_and_preserves_long_text(
     playwright = await async_playwright().start()
     try:
         browser = await _launch_browser(playwright)
+    except NotImplementedError:
+        await playwright.stop()
+        pytest.skip("Chromium subprocesses are unsupported by this event loop")
     except Exception as error:
         await playwright.stop()
         if "executable" in str(error).lower() or "installation was found" in str(error):

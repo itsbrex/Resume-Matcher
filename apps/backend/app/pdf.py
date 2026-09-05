@@ -181,6 +181,8 @@ async def _close_before_deadline(
             raise
         logger.exception("Failed to close %s within PDF cleanup budget", resource)
     except PlaywrightError:
+        if strict_timeout:
+            raise
         logger.exception("Failed to close %s within PDF cleanup budget", resource)
 
 
@@ -205,17 +207,21 @@ async def _replace_disconnected_browser(
 
         stale_browser = _browser
         stale_playwright = _playwright
-        _browser = None
-        _playwright = None
-
         if stale_browser is not None:
-            await _close_before_deadline(
-                stale_browser.close(), work_deadline, "disconnected browser"
-            )
-        if stale_playwright is not None:
-            await _close_before_deadline(
-                stale_playwright.stop(), work_deadline, "stale Playwright"
-            )
+            # Transfer ownership before awaiting cleanup. Caller cancellation
+            # cannot detach an unowned Chromium process or free its capacity.
+            owner = _retire_shared_browser(stale_browser, retain_slot=False)
+            if owner is not None:
+                try:
+                    await _await_before_deadline(asyncio.shield(owner), work_deadline, "stale browser retirement")
+                except BaseException:
+                    if not owner.done():
+                        _retain_render_slot_for_cleanup()
+                        owner.add_done_callback(lambda _done: _release_render_slot())
+                    raise
+        elif stale_playwright is not None:
+            await _close_before_deadline(stale_playwright.stop(), work_deadline, "stale Playwright")
+            _playwright = None
 
         new_playwright = await _await_before_deadline(
             async_playwright().start(), work_deadline, "Playwright startup"
@@ -416,7 +422,7 @@ async def _render_with_browser(
                 "PDF page",
                 strict_timeout=True,
             )
-        except _PDFDeadlineExceeded:
+        except (_PDFDeadlineExceeded, PlaywrightError):
             _retire_shared_browser(browser)
             if render_error is None:
                 raise
@@ -490,9 +496,10 @@ async def _render_resume_pdf_in_thread(
     selector: str,
     pdf_format: str,
     pdf_margins: dict,
+    total_deadline: float,
 ) -> asyncio.Task[bytes]:
     """Start a fallback worker whose lifetime can outlast its awaiting request."""
-    monotonic_deadline = time.monotonic() + _PDF_RENDER_TIMEOUT_SECONDS
+    monotonic_deadline = time.monotonic() + max(0.0, total_deadline - asyncio.get_running_loop().time())
     return asyncio.create_task(
         asyncio.to_thread(
             _render_resume_pdf_sync,
@@ -598,6 +605,7 @@ def _retain_render_slot_for_cleanup() -> None:
 async def _close_retired_browser(
     browser: Browser,
     playwright: Playwright | None,
+    release_slot: bool = True,
 ) -> None:
     """Own one admission slot until a retired browser is actually torn down."""
     try:
@@ -620,10 +628,11 @@ async def _close_retired_browser(
             )
             await asyncio.Event().wait()
     finally:
-        _release_render_slot()
+        if release_slot:
+            _release_render_slot()
 
 
-def _retire_shared_browser(browser: Browser) -> None:
+def _retire_shared_browser(browser: Browser, *, retain_slot: bool = True) -> asyncio.Task[None] | None:
     """Detach a browser with an unclosed page and retain capacity for teardown."""
     global _browser, _playwright
     if _browser is not browser:
@@ -632,10 +641,12 @@ def _retire_shared_browser(browser: Browser) -> None:
     playwright = _playwright
     _browser = None
     _playwright = None
-    _retain_render_slot_for_cleanup()
-    owner = asyncio.create_task(_close_retired_browser(browser, playwright))
+    if retain_slot:
+        _retain_render_slot_for_cleanup()
+    owner = asyncio.create_task(_close_retired_browser(browser, playwright, retain_slot))
     _background_owners.add(owner)
     owner.add_done_callback(_background_owners.discard)
+    return owner
 
 
 async def _release_slot_after_worker(worker: asyncio.Task[bytes]) -> None:
@@ -739,7 +750,7 @@ async def render_resume_pdf(
 
         if not subprocess_supported:
             worker = await _render_resume_pdf_in_thread(
-                url, selector, pdf_format, pdf_margins
+                url, selector, pdf_format, pdf_margins, total_deadline
             )
             try:
                 return await _await_before_deadline(

@@ -19,6 +19,14 @@ from app.config_cache import get_content_language, load_config as _load_config
 from app.database import DatabaseBusyError, ProcessingFinishOutcome, ResumeNotFoundError, db
 from app.pdf import render_resume_pdf, PDFRenderError
 from app.config import settings
+from app.preview import (
+    PreviewBusyError,
+    PreviewClaim,
+    PreviewConflictError,
+    PreviewValidationError,
+    job_fingerprint,
+    resume_fingerprint,
+)
 
 logger = logging.getLogger(__name__)
 from app.schemas import (
@@ -926,6 +934,8 @@ async def improve_resume_preview_endpoint(
             ),
             timeout=settings.request_timeout_seconds,
         )
+    except PreviewConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except asyncio.TimeoutError:
         logger.error(
             "Improve preview timed out after %ss for resume %s / job %s",
@@ -1147,28 +1157,19 @@ async def _improve_preview_flow(
 
     improved_text = json.dumps(improved_data, indent=2)
     preview_hash = _hash_improved_data(improved_data)
-    preview_hashes = job.get("preview_hashes")
-    if not isinstance(preview_hashes, dict):
-        preview_hashes = {}
-    preview_hashes[prompt_id] = preview_hash
-    # NOTE: preview_hashes updates are last-write-wins; concurrent previews can race.
-    try:
-        updated_job = await db.update_job(
-            request.job_id,
-            {
-                "preview_hash": preview_hash,
-                "preview_prompt_id": prompt_id,
-                "preview_hashes": preview_hashes,
-            },
-        )
-        if not updated_job:
-            logger.warning(
-                "Failed to persist preview hash for job %s.", request.job_id
-            )
-    except Exception as e:
-        logger.warning(
-            "Failed to persist preview hash for job %s: %s", request.job_id, e
-        )
+    registered_preview = await db.register_preview(
+        source_id=request.resume_id,
+        job_id=request.job_id,
+        payload_hash=preview_hash,
+        source_hash=resume_fingerprint(
+            resume["content"],
+            resume.get("processed_data"),
+            resume.get("original_markdown"),
+        ),
+        job_hash=job_fingerprint(job["content"]),
+        prompt_id=prompt_id,
+        ttl_seconds=settings.preview_ttl_seconds,
+    )
     diff_summary, detailed_changes, diff_error = _calculate_diff_from_resume(
         resume,
         improved_data,
@@ -1183,6 +1184,8 @@ async def _improve_preview_flow(
         data=ImproveResumeData(
             request_id=request_id,
             resume_id=None,
+            preview_id=registered_preview["preview_id"],
+            preview_expires_at=registered_preview["expires_at"],
             job_id=request.job_id,
             resume_preview=ResumeData.model_validate(improved_data),
             improvements=[
@@ -1217,28 +1220,33 @@ async def _improve_preview_flow(
 async def improve_resume_confirm_endpoint(
     request: ImproveResumeConfirmRequest,
 ) -> ImproveResumeResponse:
-    """Confirm and persist a tailored resume."""
+    """Confirm an accepted input snapshot once, with durable replay semantics."""
     resume = await db.get_resume(request.resume_id)
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
-
     job = await db.get_job(request.job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job description not found")
 
-    feature_config = _load_config()
-    enable_cover_letter = feature_config.get("enable_cover_letter", False)
-    enable_outreach = feature_config.get("enable_outreach_message", False)
-    enable_interview_prep = feature_config.get("enable_interview_prep", False)
-    language = get_content_language()
-
-    stage = "serialize_improved_data"
+    stage = "claim_preview"
     detail = "Failed to confirm resume. Please try again."
+    claim: PreviewClaim | None = None
     try:
         improved_data = request.improved_data.model_dump()
-        improved_text = json.dumps(improved_data, indent=2)
-        # NOTE: This endpoint relies on preview-hash validation to ensure the payload matches a prior preview.
-        # Stronger guarantees would require server-side preview storage or re-running the improvement.
+        claim = await db.claim_preview(
+            preview_id=request.preview_id,
+            source_id=request.resume_id,
+            job_id=request.job_id,
+            payload_hash=_hash_improved_data(improved_data),
+            lease_seconds=settings.request_timeout_seconds + 15,
+        )
+        if claim.response is not None:
+            data = ImproveResumeData.model_validate(claim.response)
+            return ImproveResumeResponse(request_id=data.request_id, data=data)
+
+        feature_config = _load_config()
+        language = get_content_language()
+
         try:
             _validate_confirm_payload(_get_original_resume_data(resume), improved_data)
         except ValueError as e:
@@ -1246,121 +1254,108 @@ async def improve_resume_confirm_endpoint(
             raise HTTPException(
                 status_code=400,
                 detail="Invalid improved resume data. Please retry preview.",
-            )
-        preview_hashes = job.get("preview_hashes")
-        allowed_hashes: set[str] = set()
-        if isinstance(preview_hashes, dict):
-            allowed_hashes.update(preview_hashes.values())
-        elif isinstance(preview_hashes, list):
-            allowed_hashes.update(
-                [value for value in preview_hashes if isinstance(value, str)]
-            )
-        else:
-            preview_hash = job.get("preview_hash")
-            if isinstance(preview_hash, str):
-                allowed_hashes.add(preview_hash)
-
-        if not allowed_hashes:
-            logger.warning(
-                "Rejecting confirm; preview hash missing for job %s.",
-                request.job_id,
-            )
-            raise HTTPException(
-                status_code=400,
-                detail="Preview required before confirmation. Please retry preview.",
-            )
-
-        request_hash = _hash_improved_data(improved_data)
-        if request_hash not in allowed_hashes:
-            logger.warning("Resume confirm rejected due to preview hash mismatch.")
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid improved resume data. Please retry preview.",
-            )
+            ) from e
 
         stage = "calculate_diff"
         response_warnings: list[str] = []
         diff_summary, detailed_changes, diff_error = _calculate_diff_from_resume(
-            resume,
-            improved_data,
+            resume, improved_data
         )
         if diff_error:
             response_warnings.append(f"Could not calculate changes: {diff_error}")
 
+        # The durable claim lasts longer than the bounded external work. Other
+        # workers return a retryable conflict instead of duplicating generation.
         stage = "generate_auxiliary_messages"
-        (
-            cover_letter,
-            outreach_message,
-            title,
-            interview_prep,
-            aux_warnings,
-        ) = await _generate_auxiliary_messages(
-            improved_data,
-            job["content"],
-            language,
-            enable_cover_letter,
-            enable_outreach,
-            enable_interview_prep,
+        cover_letter, outreach_message, title, interview_prep, aux_warnings = (
+            await asyncio.wait_for(
+                _generate_auxiliary_messages(
+                    improved_data,
+                    job["content"],
+                    language,
+                    feature_config.get("enable_cover_letter", False),
+                    feature_config.get("enable_outreach_message", False),
+                    feature_config.get("enable_interview_prep", False),
+                ),
+                timeout=settings.request_timeout_seconds,
+            )
         )
         response_warnings.extend(aux_warnings)
-
-        stage = "create_resume"
-        tailored_resume = await db.create_resume(
-            content=improved_text,
-            content_type="json",
-            filename=f"tailored_{resume.get('filename', 'resume')}",
-            is_master=False,
-            parent_id=request.resume_id,
-            processed_data=improved_data,
-            processing_status="ready",
+        improved_text = json.dumps(improved_data, indent=2)
+        request_id = str(uuid4())
+        response = ImproveResumeData(
+            request_id=request_id,
+            resume_id=None,
+            job_id=request.job_id,
+            resume_preview=request.improved_data,
+            improvements=request.improvements,
+            markdownOriginal=resume["content"],
+            markdownImproved=improved_text,
             cover_letter=cover_letter,
             outreach_message=outreach_message,
-            interview_prep=_serialize_interview_prep(interview_prep),
-            title=title,
+            interview_prep=interview_prep,
+            diff_summary=diff_summary,
+            detailed_changes=detailed_changes,
+            warnings=response_warnings,
         )
-
-        improvements_payload = [imp.model_dump() for imp in request.improvements]
-        stage = "create_improvement"
-        request_id = str(uuid4())
-        await db.create_improvement(
-            original_resume_id=request.resume_id,
-            tailored_resume_id=tailored_resume["resume_id"],
-            job_id=request.job_id,
-            improvements=improvements_payload,
+        stage = "commit_confirmation"
+        result = await db.complete_preview(
+            claim=claim,
+            resume_fields={
+                "content": improved_text,
+                "content_type": "json",
+                "filename": f"tailored_{resume.get('filename', 'resume')}",
+                "is_master": False,
+                "parent_id": request.resume_id,
+                "processed_data": improved_data,
+                "processing_status": "ready",
+                "cover_letter": cover_letter,
+                "outreach_message": outreach_message,
+                "interview_prep": _serialize_interview_prep(interview_prep),
+                "title": title,
+            },
+            response_data=response.model_dump(mode="json"),
+            improvements=[imp.model_dump() for imp in request.improvements],
         )
-
         await _auto_create_tracker_application(
             job_id=request.job_id,
-            tailored_resume_id=tailored_resume["resume_id"],
+            tailored_resume_id=result["resume_id"],
             master_resume_id=request.resume_id,
             job=job,
             title=title,
         )
-
-        return ImproveResumeResponse(
-            request_id=request_id,
-            data=ImproveResumeData(
-                request_id=request_id,
-                resume_id=tailored_resume["resume_id"],
-                job_id=request.job_id,
-                resume_preview=request.improved_data,
-                improvements=request.improvements,
-                markdownOriginal=resume["content"],
-                markdownImproved=improved_text,
-                cover_letter=cover_letter,
-                outreach_message=outreach_message,
-                interview_prep=interview_prep,
-                diff_summary=diff_summary,
-                detailed_changes=detailed_changes,
-                warnings=response_warnings,
-            ),
+        data = ImproveResumeData.model_validate(result)
+        return ImproveResumeResponse(request_id=data.request_id, data=data)
+    except PreviewBusyError as e:
+        raise HTTPException(
+            status_code=409, detail=str(e), headers={"Retry-After": "1"}
+        ) from e
+    except PreviewConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except PreviewValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except asyncio.TimeoutError as e:
+        logger.error(
+            "Confirmation auxiliary generation timed out for preview %s",
+            claim.preview_id if claim else None,
         )
+        raise HTTPException(
+            status_code=504, detail="Confirmation timed out. Please try again."
+        ) from e
     except HTTPException:
         raise
     except DatabaseBusyError:
         raise
     except Exception as e:
         _raise_improve_error("confirm", stage, e, detail)
+    finally:
+        if claim is not None and claim.token is not None:
+            try:
+                await asyncio.shield(db.release_preview_claim(claim))
+            except Exception:
+                logger.exception(
+                    "Failed to release confirmation claim for %s", claim.preview_id
+                )
 
 
 @router.post("/improve", response_model=ImproveResumeResponse)

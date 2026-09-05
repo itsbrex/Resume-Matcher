@@ -643,6 +643,8 @@ class ImproveResumeData(BaseModel):
     """Data payload for improve response."""
 
     request_id: str
+    preview_id: str | None = None
+    preview_expires_at: str | None = None
     resume_id: str | None = Field(
         default=None,
         description="Null for preview responses; populated when the tailored resume is persisted.",
@@ -684,6 +686,7 @@ class ImproveResumeConfirmRequest(BaseModel):
 
     resume_id: str
     job_id: str
+    preview_id: str | None = None
     improved_data: ResumeData
     improvements: list[ImprovementSuggestion]
 

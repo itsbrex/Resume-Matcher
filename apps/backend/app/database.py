@@ -10,12 +10,13 @@ Two engines back one SQLite file:
   synchronous LLM hot path (``get_llm_config`` → ``resolve_api_key``).
 """
 
+import copy
 import logging
 import shutil
 import sqlite3
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
@@ -27,7 +28,15 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
 from app.db_engine import init_models_sync, make_async_engine, make_sync_engine
-from app.models import ApiKey, Application, Improvement, Job, Resume
+from app.models import ApiKey, Application, Improvement, Job, Resume, TailoringPreview
+from app.preview import (
+    PreviewBusyError,
+    PreviewClaim,
+    PreviewConflictError,
+    PreviewValidationError,
+    job_fingerprint,
+    resume_fingerprint,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -449,6 +458,18 @@ class Database:
             row = await session.get(Resume, resume_id)
             if row is None:
                 return False
+            # Keep a content-free consumed marker for deleted results so retries
+            # cannot recreate them, while removing their cached personal data.
+            previews = await session.execute(
+                select(TailoringPreview).where(
+                    TailoringPreview.result_resume_id == resume_id,
+                )
+            )
+            for preview in previews.scalars():
+                preview.response_data = None
+            await session.execute(
+                delete(TailoringPreview).where(TailoringPreview.source_id == resume_id)
+            )
             await session.delete(row)
             await session.commit()
             return True
@@ -545,9 +566,210 @@ class Database:
             row = await session.get(Job, job_id)
             if row is None:
                 return False
+            await session.execute(
+                delete(TailoringPreview).where(TailoringPreview.job_id == job_id)
+            )
             await session.delete(row)
             await session.commit()
             return True
+
+    # -- Preview and confirmation operations --------------------------------
+
+    @staticmethod
+    async def _validate_preview_inputs(
+        session: AsyncSession,
+        preview: TailoringPreview,
+    ) -> None:
+        source = await session.get(Resume, preview.source_id)
+        job = await session.get(Job, preview.job_id)
+        if (
+            source is None
+            or job is None
+            or resume_fingerprint(
+                source.content, source.processed_data, source.original_markdown
+            )
+            != preview.source_hash
+            or job_fingerprint(job.content) != preview.job_hash
+        ):
+            raise PreviewConflictError(
+                "Resume or job description changed. Please retry preview."
+            )
+
+    async def register_preview(
+        self,
+        *,
+        source_id: str,
+        job_id: str,
+        payload_hash: str,
+        source_hash: str,
+        job_hash: str,
+        prompt_id: str,
+        ttl_seconds: int,
+    ) -> dict[str, str]:
+        """Register the exact input/output snapshot before acknowledging preview."""
+        now = _now()
+        row = TailoringPreview(
+            preview_id=str(uuid4()),
+            source_id=source_id,
+            job_id=job_id,
+            payload_hash=payload_hash,
+            source_hash=source_hash,
+            job_hash=job_hash,
+            created_at=now,
+            expires_at=(
+                datetime.fromisoformat(now) + timedelta(seconds=ttl_seconds)
+            ).isoformat(),
+        )
+        async with self._write_session() as session:
+            await self._validate_preview_inputs(session, row)
+            await session.execute(
+                delete(TailoringPreview).where(
+                    TailoringPreview.expires_at <= now,
+                    TailoringPreview.result_resume_id.is_(None),
+                    or_(
+                        TailoringPreview.claim_token.is_(None),
+                        TailoringPreview.claim_expires_at <= now,
+                    ),
+                )
+            )
+            job = await session.get(Job, job_id)
+            assert job is not None  # Validated in the same reserved transaction.
+            metadata = dict(job.metadata_json or {})
+            hashes = metadata.get("preview_hashes")
+            hashes = dict(hashes) if isinstance(hashes, dict) else {}
+            hashes[prompt_id] = payload_hash
+            metadata.update(
+                preview_hash=payload_hash,
+                preview_prompt_id=prompt_id,
+                preview_hashes=hashes,
+            )
+            job.metadata_json = metadata
+            session.add(row)
+            await session.commit()
+        return {"preview_id": row.preview_id, "expires_at": row.expires_at}
+
+    async def claim_preview(
+        self,
+        *,
+        preview_id: str | None,
+        source_id: str,
+        job_id: str,
+        payload_hash: str,
+        lease_seconds: int,
+    ) -> PreviewClaim:
+        """Claim once across workers; committed retries bypass generation."""
+        async with self._write_session() as session:
+            if preview_id:
+                row = await session.get(TailoringPreview, preview_id)
+            else:
+                # Compatibility for clients that omit the new operation ID.
+                row = (
+                    await session.execute(
+                        select(TailoringPreview)
+                        .where(
+                            TailoringPreview.source_id == source_id,
+                            TailoringPreview.job_id == job_id,
+                            TailoringPreview.payload_hash == payload_hash,
+                        )
+                        .order_by(TailoringPreview.created_at.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+            if row is None:
+                raise PreviewValidationError(
+                    "Preview required before confirmation. Please retry preview."
+                )
+            if row.source_id != source_id or row.job_id != job_id:
+                raise PreviewConflictError(
+                    "Preview belongs to different inputs. Please retry preview."
+                )
+            if row.payload_hash != payload_hash:
+                raise PreviewValidationError(
+                    "Invalid improved resume data. Please retry preview."
+                )
+            if row.result_resume_id is not None:
+                if (
+                    row.response_data is None
+                    or await session.get(Resume, row.result_resume_id) is None
+                ):
+                    raise PreviewConflictError(
+                        "Confirmed resume was deleted. Please retry preview."
+                    )
+                return PreviewClaim(
+                    row.preview_id, response=copy.deepcopy(row.response_data)
+                )
+            now = _now()
+            if row.expires_at <= now:
+                raise PreviewConflictError("Preview expired. Please retry preview.")
+            await self._validate_preview_inputs(session, row)
+            if row.claim_token and row.claim_expires_at and row.claim_expires_at > now:
+                raise PreviewBusyError(
+                    "Confirmation is already in progress. Please retry shortly."
+                )
+            row.claim_token = str(uuid4())
+            row.claim_expires_at = (
+                datetime.fromisoformat(now) + timedelta(seconds=lease_seconds)
+            ).isoformat()
+            await session.commit()
+            return PreviewClaim(row.preview_id, token=row.claim_token)
+
+    async def release_preview_claim(self, claim: PreviewClaim) -> None:
+        """Release only this request's uncommitted claim, including on cancellation."""
+        async with self._write_session() as session:
+            row = await session.get(TailoringPreview, claim.preview_id)
+            if row is not None and claim.token and row.claim_token == claim.token:
+                row.claim_token = None
+                row.claim_expires_at = None
+                await session.commit()
+
+    async def complete_preview(
+        self,
+        *,
+        claim: PreviewClaim,
+        resume_fields: dict[str, Any],
+        response_data: dict[str, Any],
+        improvements: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Commit resume, required relation and replay snapshot atomically."""
+        async with self._write_session() as session:
+            preview = await session.get(TailoringPreview, claim.preview_id)
+            now = _now()
+            if (
+                preview is None
+                or not claim.token
+                or preview.claim_token != claim.token
+                or not preview.claim_expires_at
+                or preview.claim_expires_at <= now
+            ):
+                raise PreviewConflictError(
+                    "Confirmation ownership expired. Please retry preview."
+                )
+            await self._validate_preview_inputs(session, preview)
+            row = self._new_resume(**resume_fields)
+            result = copy.deepcopy(response_data)
+            result.update(
+                resume_id=row.resume_id,
+                preview_id=preview.preview_id,
+                preview_expires_at=preview.expires_at,
+            )
+            session.add(row)
+            await session.flush()
+            session.add(
+                Improvement(
+                    request_id=result["request_id"],
+                    original_resume_id=preview.source_id,
+                    tailored_resume_id=row.resume_id,
+                    job_id=preview.job_id,
+                    improvements=improvements,
+                    created_at=now,
+                )
+            )
+            preview.response_data = result
+            preview.result_resume_id = row.resume_id
+            preview.claim_token = None
+            preview.claim_expires_at = None
+            await session.commit()
+            return result
 
     # -- Improvement operations ---------------------------------------------
 
@@ -904,12 +1126,13 @@ class Database:
     async def reset_database(self) -> None:
         """Reset by truncating user-document tables and clearing uploads.
 
-        Clears resumes/jobs/improvements **and** tracker applications (leaving
+        Clears resumes/jobs/improvements, preview replay data, and tracker applications (leaving
         orphaned cards after a full data reset would be a bug). Encrypted
         ``api_keys`` are preserved — matching the pre-existing behavior where a
         reset never wiped the user's stored credentials.
         """
         async with self._write_session() as session:
+            await session.execute(delete(TailoringPreview))
             await session.execute(delete(Application))
             await session.execute(delete(Improvement))
             await session.execute(delete(Job))

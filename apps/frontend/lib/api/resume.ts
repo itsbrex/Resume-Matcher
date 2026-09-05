@@ -87,6 +87,7 @@ export interface ResumeUploadResponse {
 interface ImproveResumeConfirmRequest {
   resume_id: string;
   job_id: string;
+  preview_id?: string | null;
   improved_data: ResumeData;
   improvements: Array<{
     suggestion: string;

@@ -9,7 +9,7 @@ import threading
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -325,6 +325,7 @@ class Settings(BaseSettings):
     # (Ollama, llama.cpp, …) often need longer than the 240s default; bounded to
     # [30, 1800]s so a stuck request can't hold a worker indefinitely.
     request_timeout_seconds: int = 240
+    preview_ttl_seconds: int = Field(default=86400, ge=60, le=604800)
 
     @field_validator("request_timeout_seconds", mode="before")
     @classmethod

@@ -140,6 +140,7 @@ export default function TailorPage() {
     return {
       resume_id: masterResumeId,
       job_id: result.data.job_id,
+      preview_id: result.data.preview_id ?? null,
       improved_data: resumePreview as ResumeData,
       improvements:
         result.data.improvements?.map((item) => ({

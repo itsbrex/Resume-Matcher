@@ -49,6 +49,10 @@ size limits, and 422 for malformed or textless/scanned documents. Upload and
 retry processing return 409 when a newer processing attempt supersedes the
 request, or 404 when the resume is deleted while processing.
 
+## Preview and confirmation
+
+Preview returns `data.preview_id` and `data.preview_expires_at`; confirmation forwards `preview_id` with the unchanged proposed resume. Successful retries return the same stored response without creating another resume. An active confirmation returns 409 with `Retry-After: 1`; stale or expired input snapshots require a new preview. See [the complete contract and transaction lifecycle](../features/preview-confirmation.md).
+
 ## Resume Wizard (`lib/api/resume-wizard.ts`)
 
 ```typescript

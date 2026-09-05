@@ -97,6 +97,27 @@ class Improvement(Base):
     created_at: Mapped[str] = mapped_column(String, default=_utcnow_iso)
 
 
+class TailoringPreview(Base):
+    """An accepted preview, bounded confirmation claim and immutable result."""
+
+    __tablename__ = "tailoring_previews"
+
+    preview_id: Mapped[str] = mapped_column(String, primary_key=True)
+    source_id: Mapped[str] = mapped_column(String, index=True)
+    job_id: Mapped[str] = mapped_column(String, index=True)
+    payload_hash: Mapped[str] = mapped_column(String)
+    source_hash: Mapped[str] = mapped_column(String)
+    job_hash: Mapped[str] = mapped_column(String)
+    created_at: Mapped[str] = mapped_column(String)
+    expires_at: Mapped[str] = mapped_column(String, index=True)
+    result_resume_id: Mapped[str | None] = mapped_column(
+        String, nullable=True, index=True
+    )
+    claim_token: Mapped[str | None] = mapped_column(String, nullable=True)
+    claim_expires_at: Mapped[str | None] = mapped_column(String, nullable=True)
+    response_data: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+
 class Application(Base):
     """A Kanban application-tracker card."""
 

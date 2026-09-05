@@ -50,6 +50,7 @@ Generic, reusable guides (Swiss design system, Next.js performance) live in [`..
 | [adding-resume-templates](features/adding-resume-templates.md) | How to add a new template |
 | [enrichment](features/enrichment.md) | AI enrichment flow |
 | [jd-match](features/jd-match.md) | Job description matching |
+| [preview-confirmation](features/preview-confirmation.md) | Durable preview identity, atomic confirmation and replay |
 | [i18n](features/i18n.md) | Internationalization |
 | [i18n-preparation](features/i18n-preparation.md) | i18n setup notes |
 

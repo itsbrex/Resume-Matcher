@@ -114,6 +114,9 @@ async def _auto_create_tracker_application(
     tracker failure can never break the tailoring flow.
     """
     try:
+        if title is None:
+            saved_resume = await db.get_resume(tailored_resume_id)
+            title = (saved_resume or {}).get("title")
         company = (job or {}).get("company")
         role = title or (job or {}).get("role")
         await db.create_application(

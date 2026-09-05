@@ -619,7 +619,11 @@ async def test_replay_repairs_tracker_card_after_lost_followup(isolated_db: Data
     assert first.status_code == 200 and await isolated_db.list_applications() == []
     second = await confirmation_client.post("/api/v1/resumes/improve/confirm", json=payload)
     assert second.json() == first.json()
-    assert len(await isolated_db.list_applications()) == 1
+    cards = await isolated_db.list_applications()
+    assert len(cards) == 1
+    saved = await isolated_db.get_resume(first.json()["data"]["resume_id"])
+    assert saved is not None and saved["title"] == "Engineer @ Acme"
+    assert cards[0]["role"] == saved["title"]
 
 
 async def test_tokenless_replay_prefers_confirmed_over_new_identical_preview(isolated_db: Database, confirmation_client: AsyncClient, sample_resume: dict[str, Any]) -> None:

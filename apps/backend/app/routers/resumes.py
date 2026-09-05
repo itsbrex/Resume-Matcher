@@ -1279,7 +1279,11 @@ async def improve_resume_confirm_endpoint(
         language = get_content_language()
 
         try:
-            _validate_confirm_payload(_get_original_resume_data(resume), improved_data)
+            original = _get_original_resume_data(resume)
+            canonical = ResumeData.model_validate(finalize_ai_resume(original, improved_data)).model_dump()
+            if canonical != improved_data:
+                raise ValueError("Registered preview no longer satisfies preservation rules")
+            _validate_confirm_payload(original, improved_data)
         except ValueError as e:
             logger.warning("Resume confirm rejected: %s", e)
             raise HTTPException(

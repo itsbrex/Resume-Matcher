@@ -632,3 +632,17 @@ async def test_tokenless_replay_prefers_confirmed_over_new_identical_preview(iso
     replay = await confirmation_client.post("/api/v1/resumes/improve/confirm", json=payload)
     assert replay.json() == first.json()
     assert len(await isolated_db.list_resumes()) == 2
+
+
+@pytest.mark.parametrize("section", ["languages", "certificationsTraining", "awards"])
+async def test_legacy_registered_preview_cannot_persist_unsupported_additions(isolated_db: Database, confirmation_client: AsyncClient, sample_resume: dict[str, Any], section: str) -> None:
+    payload = await preview_payload(isolated_db, confirmation_client, sample_resume)
+    payload["improved_data"]["additional"][section].append("Unsupported synthetic qualification")
+    async with isolated_db._session() as session:
+        row = await session.get(TailoringPreview, payload["preview_id"])
+        assert row is not None
+        row.payload_hash = resumes._hash_improved_data(payload["improved_data"])
+        await session.commit()
+    response = await confirmation_client.post("/api/v1/resumes/improve/confirm", json=payload)
+    assert response.status_code == 400, response.text
+    assert len(await isolated_db.list_resumes()) == 1

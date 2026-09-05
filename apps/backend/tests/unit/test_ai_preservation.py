@@ -261,7 +261,7 @@ async def test_restored_unsafe_writer_attempt_is_not_counted_as_applied() -> Non
         "app.services.refiner.complete_json",
         new_callable=AsyncMock,
         return_value=partial,
-    ):
+    ) as writer:
         result = await refine_resume(
             initial_tailored=source,
             master_resume=master,
@@ -274,7 +274,7 @@ async def test_restored_unsafe_writer_attempt_is_not_counted_as_applied() -> Non
             ),
         )
 
-    assert result.passes_attempted == 1
+    assert writer.await_count == 1
     assert result.passes_completed == 0
     assert result.refined_data == source
 

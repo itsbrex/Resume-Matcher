@@ -668,7 +668,7 @@ export const useFileUpload = (
     if (inputRef.current) {
       inputRef.current.click();
     }
-  }, [state.isUploadingGlobal, state.files.length, multiple, setState]);
+  }, [state.isUploadingGlobal, state.files.length, multiple]);
 
   const getInputProps = useCallback(
     (props?: InputHTMLAttributes<HTMLInputElement>) => ({

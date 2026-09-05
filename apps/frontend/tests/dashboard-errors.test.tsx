@@ -70,7 +70,9 @@ describe('dashboard recoverable errors', () => {
     render(<Dashboard />);
     fireEvent.click(await screen.findByRole('button', { name: 'dashboard.deleteAndReupload' }));
     await act(async () =>
-      screen.getAllByRole('button', { name: 'dashboard.deleteAndReupload' }).at(-1)?.click()
+      within(screen.getByRole('dialog'))
+        .getByRole('button', { name: 'dashboard.deleteAndReupload' })
+        .click()
     );
     fireEvent.focus(window);
     await act(async () => {});

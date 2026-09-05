@@ -140,6 +140,8 @@ async def test_document_conversion_uses_at_most_two_workers() -> None:
 
 async def test_cancellation_waits_for_converter_tempfile_cleanup(tmp_path: Path) -> None:
     """Cancellation does not abandon the worker before its finally cleanup."""
+    converter_dir = tmp_path / "converter"
+    converter_dir.mkdir()
     document = _docx_bytes("cleanup test")
     entered = threading.Event()
     release = threading.Event()
@@ -150,12 +152,12 @@ async def test_cancellation_waits_for_converter_tempfile_cleanup(tmp_path: Path)
         return SimpleNamespace(text_content="cleanup test")
 
     with (
-        patch("app.services.parser.tempfile.tempdir", str(tmp_path)),
+        patch("app.services.parser.tempfile.tempdir", str(converter_dir)),
         patch("app.services.parser.MarkItDown.convert", new=slow_convert),
     ):
         task = asyncio.create_task(parse_document(document, "cancelled.docx"))
         assert await asyncio.to_thread(entered.wait, 5)
-        assert list(tmp_path.iterdir())
+        assert list(converter_dir.iterdir())
         task.cancel()
         await asyncio.sleep(0)
         assert not task.done()
@@ -163,15 +165,17 @@ async def test_cancellation_waits_for_converter_tempfile_cleanup(tmp_path: Path)
         with pytest.raises(asyncio.CancelledError):
             await task
 
-    assert list(tmp_path.iterdir()) == []
+    assert list(converter_dir.iterdir()) == []
 
 
 async def test_tempfile_cleanup_after_success_and_converter_error(tmp_path: Path) -> None:
     """Worker tempfiles are removed on both normal and exceptional completion."""
+    converter_dir = tmp_path / "converter"
+    converter_dir.mkdir()
     document = _docx_bytes("cleanup paths")
-    with patch("app.services.parser.tempfile.tempdir", str(tmp_path)):
+    with patch("app.services.parser.tempfile.tempdir", str(converter_dir)):
         assert await parse_document(document, "success.docx") == "cleanup paths"
-        assert list(tmp_path.iterdir()) == []
+        assert list(converter_dir.iterdir()) == []
 
         with patch(
             "app.services.parser.MarkItDown.convert",
@@ -180,4 +184,4 @@ async def test_tempfile_cleanup_after_success_and_converter_error(tmp_path: Path
             with pytest.raises(RuntimeError, match="controlled converter error"):
                 await parse_document(document, "error.docx")
 
-    assert list(tmp_path.iterdir()) == []
+    assert list(converter_dir.iterdir()) == []

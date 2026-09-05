@@ -58,6 +58,28 @@ beforeEach(() => {
 });
 
 describe('dashboard recoverable errors', () => {
+  it('ignores a failed delete after the active master changes', async () => {
+    let rejectDelete!: (error: Error) => void;
+    remove.mockReturnValue(
+      new Promise((_, reject) => {
+        rejectDelete = reject;
+      })
+    );
+    list.mockResolvedValueOnce([row('old', true)]).mockResolvedValue([row('new', true)]);
+    get.mockResolvedValue({ processed_resume: null, raw_resume: { processing_status: 'failed' } });
+    render(<Dashboard />);
+    fireEvent.click(await screen.findByRole('button', { name: 'dashboard.deleteAndReupload' }));
+    await act(async () =>
+      screen.getAllByRole('button', { name: 'dashboard.deleteAndReupload' }).at(-1)?.click()
+    );
+    fireEvent.focus(window);
+    await act(async () => {});
+    expect(localStorage.getItem('master_resume_id')).toBe('new');
+    await act(async () => rejectDelete(new Error('old delete failed')));
+    expect(screen.queryByText('dashboard.errors.deleteFailed')).toBeNull();
+    expect(localStorage.getItem('master_resume_id')).toBe('new');
+  });
+
   it.each([
     new Error('server 500'),
     new Error('Request timed out'),

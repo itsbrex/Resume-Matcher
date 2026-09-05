@@ -1157,6 +1157,7 @@ async def _improve_preview_flow(
 
     improved_text = json.dumps(improved_data, indent=2)
     preview_hash = _hash_improved_data(improved_data)
+    improvements = generate_improvements(job_keywords)
     registered_preview = await db.register_preview(
         source_id=request.resume_id,
         job_id=request.job_id,
@@ -1169,6 +1170,7 @@ async def _improve_preview_flow(
         job_hash=job_fingerprint(job["content"]),
         prompt_id=prompt_id,
         ttl_seconds=settings.preview_ttl_seconds,
+        improvements=improvements,
     )
     diff_summary, detailed_changes, diff_error = _calculate_diff_from_resume(
         resume,
@@ -1176,7 +1178,6 @@ async def _improve_preview_flow(
     )
     if diff_error:
         response_warnings.append(f"Could not calculate changes: {diff_error}")
-    improvements = generate_improvements(job_keywords)
 
     request_id = str(uuid4())
     return ImproveResumeResponse(
@@ -1242,6 +1243,10 @@ async def improve_resume_confirm_endpoint(
         )
         if claim.response is not None:
             data = ImproveResumeData.model_validate(claim.response)
+            await _auto_create_tracker_application(
+                job_id=request.job_id, tailored_resume_id=data.resume_id,
+                master_resume_id=request.resume_id, job=job, title=None,
+            )
             return ImproveResumeResponse(request_id=data.request_id, data=data)
 
         feature_config = _load_config()
@@ -1288,7 +1293,7 @@ async def improve_resume_confirm_endpoint(
             resume_id=None,
             job_id=request.job_id,
             resume_preview=request.improved_data,
-            improvements=request.improvements,
+            improvements=claim.improvements or [],
             markdownOriginal=resume["content"],
             markdownImproved=improved_text,
             cover_letter=cover_letter,
@@ -1315,8 +1320,9 @@ async def improve_resume_confirm_endpoint(
                 "title": title,
             },
             response_data=response.model_dump(mode="json"),
-            improvements=[imp.model_dump() for imp in request.improvements],
+            improvements=claim.improvements or [],
         )
+        claim = None  # The transaction committed; there is no lease to release.
         await _auto_create_tracker_application(
             job_id=request.job_id,
             tailored_resume_id=result["resume_id"],

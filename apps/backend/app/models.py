@@ -101,6 +101,9 @@ class TailoringPreview(Base):
     """An accepted preview, bounded confirmation claim and immutable result."""
 
     __tablename__ = "tailoring_previews"
+    __table_args__ = (Index("ix_preview_compatibility", "source_id", "job_id", "payload_hash", "created_at"),)
+
+    improvements: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
 
     preview_id: Mapped[str] = mapped_column(String, primary_key=True)
     source_id: Mapped[str] = mapped_column(String, index=True)

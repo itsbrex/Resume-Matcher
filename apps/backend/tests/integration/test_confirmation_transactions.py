@@ -88,8 +88,8 @@ async def preview_payload(
         "improved_data": preview["resume_preview"],
         "improvements": preview["improvements"],
     }
-    if preview.get("preview_id"):
-        payload["preview_id"] = preview["preview_id"]
+    assert preview["preview_id"]
+    payload["preview_id"] = preview["preview_id"]
     return payload
 
 
@@ -600,3 +600,35 @@ async def test_full_data_reset_removes_confirmation_replay_content(
     async with isolated_db._session() as session:
         assert list((await session.execute(select(TailoringPreview))).scalars()) == []
     assert await isolated_db.list_resumes() == []
+
+
+async def test_confirmation_uses_registered_suggestions(isolated_db: Database, confirmation_client: AsyncClient, sample_resume: dict[str, Any]) -> None:
+    payload = await preview_payload(isolated_db, confirmation_client, sample_resume)
+    expected = copy.deepcopy(payload["improvements"])
+    payload["improvements"] = [{"suggestion": "Injected unregistered suggestion", "lineNumber": None}]
+    result = await confirmation_client.post("/api/v1/resumes/improve/confirm", json=payload)
+    assert result.status_code == 200, result.text
+    assert result.json()["data"]["improvements"] == expected
+
+
+async def test_replay_repairs_tracker_card_after_lost_followup(isolated_db: Database, confirmation_client: AsyncClient, sample_resume: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = await preview_payload(isolated_db, confirmation_client, sample_resume)
+    with monkeypatch.context() as stage:
+        stage.setattr(resumes, "_auto_create_tracker_application", AsyncMock(return_value=None))
+        first = await confirmation_client.post("/api/v1/resumes/improve/confirm", json=payload)
+    assert first.status_code == 200 and await isolated_db.list_applications() == []
+    second = await confirmation_client.post("/api/v1/resumes/improve/confirm", json=payload)
+    assert second.json() == first.json()
+    assert len(await isolated_db.list_applications()) == 1
+
+
+async def test_tokenless_replay_prefers_confirmed_over_new_identical_preview(isolated_db: Database, confirmation_client: AsyncClient, sample_resume: dict[str, Any]) -> None:
+    payload = await preview_payload(isolated_db, confirmation_client, sample_resume)
+    first = await confirmation_client.post("/api/v1/resumes/improve/confirm", json=payload)
+    assert first.status_code == 200
+    new_preview = await confirmation_client.post("/api/v1/resumes/improve/preview", json={"resume_id": payload["resume_id"], "job_id": payload["job_id"]})
+    assert new_preview.status_code == 200
+    payload.pop("preview_id")
+    replay = await confirmation_client.post("/api/v1/resumes/improve/confirm", json=payload)
+    assert replay.json() == first.json()
+    assert len(await isolated_db.list_resumes()) == 2

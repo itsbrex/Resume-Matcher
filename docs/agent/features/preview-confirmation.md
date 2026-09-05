@@ -27,7 +27,7 @@ The example abbreviates `improved_data`: send the complete, unchanged `resume_pr
 | Another worker currently owns confirmation | 409 with `Retry-After: 1`; retry the same request after the current attempt settles |
 | Source/JD changed, preview expired, wrong input IDs, or confirmed result deleted | 409; recompute preview |
 | No matching registered preview or payload changed | 400; recompute preview |
-| Source or job no longer exists | 404 |
+| Source or job missing at initial lookup | 404; deletion or change during confirmation returns 409 |
 | Auxiliary generation exceeds its timeout | 504; uncommitted claim released |
 | Required database operation fails | Generic 500; transaction rolled back |
 
@@ -63,3 +63,5 @@ Deleting a confirmed result clears its cached response content and retains a con
 | `apps/backend/tests/integration/test_tracker_autocreate.py` | Two actual confirmation requests retain one result/card |
 
 Tests use synthetic resumes and replace only AI boundaries. They include separate database instances, barrier-controlled concurrent operations, ORM insert faults, and stored-response equality. No live provider calls are needed.
+
+Consumed preview responses deliberately remain durable while their source/job/result exists so delayed retries cannot create duplicates. This stores an additional response snapshot; deleting a source, job, result or resetting the database clears its replay payload. Expiring consumed operations requires an explicit API retention policy and is not inferred from the unconsumed preview TTL.

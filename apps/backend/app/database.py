@@ -605,11 +605,13 @@ class Database:
         job_hash: str,
         prompt_id: str,
         ttl_seconds: int,
+        improvements: list[dict[str, Any]] | None = None,
     ) -> dict[str, str]:
         """Register the exact input/output snapshot before acknowledging preview."""
         now = _now()
         row = TailoringPreview(
             preview_id=str(uuid4()),
+            improvements=copy.deepcopy(improvements or []),
             source_id=source_id,
             job_id=job_id,
             payload_hash=payload_hash,
@@ -670,8 +672,9 @@ class Database:
                             TailoringPreview.source_id == source_id,
                             TailoringPreview.job_id == job_id,
                             TailoringPreview.payload_hash == payload_hash,
+                            or_(TailoringPreview.result_resume_id.is_not(None), TailoringPreview.expires_at > _now()),
                         )
-                        .order_by(TailoringPreview.created_at.desc())
+                        .order_by(TailoringPreview.result_resume_id.is_not(None).desc(), TailoringPreview.created_at.desc())
                         .limit(1)
                     )
                 ).scalar_one_or_none()
@@ -711,10 +714,12 @@ class Database:
                 datetime.fromisoformat(now) + timedelta(seconds=lease_seconds)
             ).isoformat()
             await session.commit()
-            return PreviewClaim(row.preview_id, token=row.claim_token)
+            return PreviewClaim(row.preview_id, token=row.claim_token, improvements=copy.deepcopy(row.improvements or []))
 
     async def release_preview_claim(self, claim: PreviewClaim) -> None:
         """Release only this request's uncommitted claim, including on cancellation."""
+        if not claim.token:
+            return
         async with self._write_session() as session:
             row = await session.get(TailoringPreview, claim.preview_id)
             if row is not None and claim.token and row.claim_token == claim.token:

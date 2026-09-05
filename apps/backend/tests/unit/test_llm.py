@@ -440,7 +440,7 @@ class TestAppearsTruncated:
         }
         assert _appears_truncated(data, schema_type="resume") is False
 
-    def test_resume_valid(self):
+    def test_resume_valid(self) -> None:
         """Well-formed resume with all sections present is not truncated."""
         data = {
             "personalInfo": {"name": "John"},
@@ -450,7 +450,7 @@ class TestAppearsTruncated:
         }
         assert _appears_truncated(data, schema_type="resume") is False
 
-    def test_resume_missing_fields_not_empty(self):
+    def test_resume_missing_fields_not_empty(self) -> None:
         """Missing fields are not the same as empty arrays — not flagged."""
         data = {
             "personalInfo": {"name": "John"},
@@ -461,12 +461,12 @@ class TestAppearsTruncated:
 
     # --- enrichment schema ---
 
-    def test_enrichment_missing_keys(self):
+    def test_enrichment_missing_keys(self) -> None:
         """Missing required keys in enrichment output is suspicious."""
         data = {"analysis_summary": "Good resume"}
         assert _appears_truncated(data, schema_type="enrichment") is True
 
-    def test_enrichment_empty_arrays(self):
+    def test_enrichment_empty_arrays(self) -> None:
         """Empty items_to_enrich and questions are valid (resume already strong)."""
         data = {
             "items_to_enrich": [],
@@ -475,7 +475,7 @@ class TestAppearsTruncated:
         }
         assert _appears_truncated(data, schema_type="enrichment") is False
 
-    def test_enrichment_populated(self):
+    def test_enrichment_populated(self) -> None:
         """Populated enrichment output is not truncated."""
         data = {
             "items_to_enrich": [{"item_id": "exp_0"}],
@@ -486,19 +486,19 @@ class TestAppearsTruncated:
 
     # --- diff schema ---
 
-    def test_diff_empty_changes(self):
+    def test_diff_empty_changes(self) -> None:
         """Empty changes array in diff output is valid (no changes needed)."""
         data = {"changes": [], "strategy_notes": "No changes needed"}
         assert _appears_truncated(data, schema_type="diff") is False
 
-    def test_diff_populated(self):
+    def test_diff_populated(self) -> None:
         """Populated diff output is not truncated."""
         data = {"changes": [{"path": "summary", "action": "replace"}]}
         assert _appears_truncated(data, schema_type="diff") is False
 
     # --- keywords schema ---
 
-    def test_keywords_empty(self):
+    def test_keywords_empty(self) -> None:
         """Empty keyword lists are valid (sparse job description)."""
         data = {"required_skills": [], "preferred_skills": [], "keywords": []}
         assert _appears_truncated(data, schema_type="keywords") is False
@@ -510,7 +510,7 @@ class TestAppearsTruncated:
         data = {"workExperience": [], "education": [{"degree": "BS"}]}
         assert _appears_truncated(data) is False
 
-    def test_unknown_schema_no_heuristics(self):
+    def test_unknown_schema_no_heuristics(self) -> None:
         """Unknown schema types have no truncation heuristics."""
         data = {"anything": []}
         assert _appears_truncated(data, schema_type="custom") is False

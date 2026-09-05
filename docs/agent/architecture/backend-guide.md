@@ -59,7 +59,8 @@ DB file: `data/resume_matcher.db`.
 synchronous LLM hot path). Both apply PRAGMAs `journal_mode=WAL`, `foreign_keys=ON`,
 `busy_timeout`. Master changes reserve SQLite writes with `BEGIN IMMEDIATE`; a partial unique index
 provides the final single-master constraint across connections. Jobs' dynamic fields
-(`job_keywords`, `company`/`role`) live in `metadata_json`, flattened on read. Preview
+(`job_keywords`, `job_keywords_hash`, `company`/`role`, `preview_hash`,
+`preview_prompt_id`, and `preview_hashes`) live in `metadata_json`, flattened on read. Preview
 identity, fingerprints, claims and replay responses live in `tailoring_previews`.
 See [storage transactions](storage-transactions.md) and [confirmation](../features/preview-confirmation.md).
 
@@ -90,7 +91,7 @@ network by default, so normal test runs do not read or overwrite developer setti
 | API Key Passing | Direct to litellm (avoids race conditions)                                                                            |
 | JSON Mode       | Auto-enabled for supported providers                                                                                  |
 | Retry Logic     | Bounded task-schema content retries plus a separate transport-error policy; [exact policy](../llm-integration.md)     |
-| Timeouts        | 30s health; completion/JSON base120s/180s scale by tokens/provider and are capped by the remaining operation deadline |
+| Timeouts        | 30s health; completion/JSON base 120s/180s scale by tokens/provider and are capped by the remaining operation deadline |
 
 ## Prompt Guidelines
 

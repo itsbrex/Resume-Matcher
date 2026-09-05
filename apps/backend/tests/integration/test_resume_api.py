@@ -313,7 +313,9 @@ class TestRetryProcessing:
         assert data["processing_status"] == "ready"
 
     @patch("app.routers.resumes.db", new_callable=AsyncMock)
-    async def test_retry_not_failed_returns_400(self, mock_db, client, mock_resume_record):
+    async def test_retry_not_failed_returns_400(
+        self, mock_db: AsyncMock, client: AsyncClient, mock_resume_record: dict[str, Any]
+    ) -> None:
         # processing_status is "ready", not "failed"
         mock_db.get_resume.return_value = mock_resume_record
         async with client:

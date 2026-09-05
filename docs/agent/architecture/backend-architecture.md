@@ -133,7 +133,7 @@ await complete_json(prompt, ...)   # 180s base, schema-aware bounded recovery
 
 - API keys passed directly (avoids os.environ race conditions)
 - Auto JSON mode for supported providers
-- Default2 content retries; increasing supported sampling values (0.1→0.3→0.5), with caller-specific retry counts
+- Default 2 content retries; increasing supported sampling values (0.1→0.3→0.5), with caller-specific retry counts
 - Separate explicit transport policy; cancellation propagates
 - One operation-wide deadline includes preloads, retries and persistence; [limits](ai-operation-budgets.md)
 - Bracket-matching JSON extraction

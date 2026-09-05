@@ -1,6 +1,6 @@
 # Resume reliability: file and flow map
 
-This map accompanies the fixes for audit issues [#932–#975](https://github.com/srbhr/Resume-Matcher/issues/931). The stack is split by ownership boundary so each PR can be reviewed against its issues. Merge from the first PR upward. The [file inventory](reliability-file-inventory.csv) lists tracked repository paths, their role and the audit issues that changed them; the table below identifies the files that own each behavior.
+This map accompanies the fixes for audit issues #932–#975, tracked by [#931](https://github.com/srbhr/Resume-Matcher/issues/931). The stack is split by ownership boundary so each PR can be reviewed against its issues. Merge from the first PR upward. The [file inventory](reliability-file-inventory.csv) lists tracked repository paths, their role and the audit issues that changed them; the table below identifies the files that own each behavior.
 
 ## Ownership and issue map
 
@@ -94,4 +94,4 @@ uv run --project ../backend python tests/browser/reliability_flow.py \
 
 The script intercepts every API call with synthetic responses and blocks other origins. It checks real Next navigation, the late-A viewer control, an actual downloaded PDF, query-only builder switching and same-origin multi-tab draft separation. It does not infer a production wrong-delete bug from forced unkeyed component reuse.
 
-PDF tests render actual template CSS with Chromium and inspect geometry and extracted text. The multilingual fixture covers French, Spanish, Japanese and Chinese in a long A4/Letter document. These are representative checks, not proof for every locale/font/layout, visual quality score or vendor ATS certification. Missing Chromium is reported as a skipped browser-dependent test, not a successful render.
+PDF tests render actual template CSS with Chromium and inspect geometry and extracted text. The multilingual fixture covers French, Spanish, Japanese and Chinese in a long A4/Letter document, including embedded non-missing glyph programs for its asserted CJK corpus. Install CJK fonts (for example `fonts-noto-cjk` on Debian/Ubuntu); the Docker image already includes them. Text extraction alone does not prove glyph rendering. These are representative checks, not proof for every locale/font/layout, visual quality score or vendor ATS certification. Missing Chromium is reported as a skipped browser-dependent test, not a successful render.

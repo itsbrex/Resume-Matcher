@@ -57,6 +57,24 @@ uv run pytest
 
 ## Definition of Done
 
+### Validate the Docker release build before merging
+
+The `Publish Docker Image` workflow builds Linux amd64 and arm64 on pushes to
+`main` and version tags. Its optional `dry_run` input uses the same Dockerfile
+and platform build while skipping registry login and image publication:
+
+```bash
+gh workflow run docker-publish.yml --ref YOUR_BRANCH -f dry_run=true
+```
+
+Inspect that run's result before merging. Pushes to `main`, version tags, and
+manual runs with the default `dry_run=false` retain normal publication behavior.
+Local tests and `npm run build` complement this check; they do not replace the
+Linux multi-platform container build. Registry credentials and service availability
+are still checked by the publishing run after merge.
+
+### Pull request checks
+
 Before marking a PR as ready:
 
 - [ ] Code compiles without errors

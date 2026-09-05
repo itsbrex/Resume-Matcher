@@ -2,6 +2,7 @@
 
 import json
 import os
+import stat
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -13,6 +14,7 @@ import pytest
 import app.config as config_module
 from app.config import load_config_file, save_config_file, settings
 from app.config_cache import invalidate_config_cache, load_config
+from app.routers.config import _get_config_path
 
 
 def test_imported_config_path_is_owned_by_data_dir(
@@ -55,6 +57,58 @@ def test_legacy_config_path_monkeypatch_remains_supported(
 
     assert json.loads(compatibility_path.read_text()) == {"provider": "gemini"}
     assert load_config_file()["provider"] == "gemini"
+    assert load_config() == {"provider": "gemini"}
+    assert _get_config_path() == compatibility_path
+
+
+def test_cached_config_follows_a_changed_compatibility_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+    first.write_text('{"language": "en"}')
+    second.write_text('{"language": "fr"}')
+    monkeypatch.setattr(config_module, "CONFIG_FILE_PATH", first)
+    assert load_config() == {"language": "en"}
+    monkeypatch.setattr(config_module, "CONFIG_FILE_PATH", second)
+    assert load_config() == {"language": "fr"}
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permissions and symlink contract")
+def test_atomic_save_preserves_symlink_target_and_existing_permissions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "managed.json"
+    target.write_text('{"provider": "old"}')
+    target.chmod(0o640)
+    link = tmp_path / "config.json"
+    link.symlink_to(target)
+    monkeypatch.setattr(config_module, "CONFIG_FILE_PATH", link)
+
+    save_config_file({"provider": "gemini"})
+
+    assert link.is_symlink()
+    assert json.loads(target.read_text()) == {"provider": "gemini"}
+    assert stat.S_IMODE(target.stat().st_mode) == 0o640
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Directory fsync is a POSIX contract")
+def test_atomic_save_syncs_the_replaced_directory_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "config.json"
+    monkeypatch.setattr(config_module, "CONFIG_FILE_PATH", path)
+    real_fsync = os.fsync
+    synced_snapshots: list[dict[str, Any]] = []
+
+    def observe_fsync(fd: int) -> None:
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            synced_snapshots.append(json.loads(path.read_text()))
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", observe_fsync)
+    save_config_file({"provider": "gemini"})
+    assert synced_snapshots == [{"provider": "gemini"}]
 
 
 def test_failed_atomic_replace_preserves_snapshot_and_removes_temp_file(

@@ -2,6 +2,7 @@
 
 import json
 import os
+import stat
 import tempfile
 import threading
 from pathlib import Path
@@ -15,7 +16,7 @@ ALLOWED_LOG_LEVELS = ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG")
 _CONFIG_WRITE_LOCK = threading.Lock()
 
 
-def _config_file_path() -> Path:
+def get_config_path() -> Path:
     """Return the canonical config path, honoring legacy monkeypatches.
 
     ``settings.config_path`` owns the runtime location. ``CONFIG_FILE_PATH`` is
@@ -30,7 +31,7 @@ def _config_file_path() -> Path:
 
 def _read_config_json() -> dict[str, Any]:
     """Raw read of config.json (no key injection)."""
-    config_path = _config_file_path()
+    config_path = get_config_path()
     if config_path.exists():
         try:
             return json.loads(config_path.read_text())
@@ -50,8 +51,13 @@ def _write_config_json(config: dict[str, Any]) -> None:
     """
     serialized = json.dumps(config, indent=2)
     with _CONFIG_WRITE_LOCK:
-        config_path = _config_file_path()
+        # Follow managed symlinks instead of replacing the link itself. Keep an
+        # existing target's access mode; new configurations remain owner-only.
+        config_path = get_config_path().resolve()
         config_path.parent.mkdir(parents=True, exist_ok=True)
+        existing_mode = (
+            stat.S_IMODE(config_path.stat().st_mode) if config_path.exists() else None
+        )
         file_descriptor, temporary_name = tempfile.mkstemp(
             dir=config_path.parent,
             prefix=f".{config_path.name}.",
@@ -59,12 +65,22 @@ def _write_config_json(config: dict[str, Any]) -> None:
         )
         temporary_path = Path(temporary_name)
         try:
+            if existing_mode is not None:
+                os.chmod(temporary_path, existing_mode)
             with os.fdopen(file_descriptor, "w", encoding="utf-8") as temporary_file:
                 file_descriptor = -1
                 temporary_file.write(serialized)
                 temporary_file.flush()
                 os.fsync(temporary_file.fileno())
             os.replace(temporary_path, config_path)
+            if os.name != "nt":
+                directory_fd = os.open(
+                    config_path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+                )
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
         finally:
             if file_descriptor >= 0:
                 os.close(file_descriptor)
@@ -381,7 +397,7 @@ class Settings(BaseSettings):
 settings = Settings()
 
 # Deprecated compatibility alias. Runtime config I/O is owned by
-# ``settings.config_path`` through ``_config_file_path``; downstream tests and
+# ``settings.config_path`` through ``get_config_path``; downstream tests and
 # integrations that explicitly monkeypatch this name continue to work.
 CONFIG_FILE_PATH = settings.config_path
 _IMPORTED_CONFIG_FILE_PATH = CONFIG_FILE_PATH

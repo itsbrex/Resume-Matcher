@@ -567,9 +567,11 @@ class TestRequiresBaseUrlValidation:
             )
 
         assert resp.status_code == 200
-        assert json.loads((tmp_path / "data" / "config.json").read_text())["provider"] == (
-            "azure_foundry"
-        )
+        assert json.loads((tmp_path / "data" / "config.json").read_text()) == {
+            "provider": "azure_foundry",
+            "model": "gpt-5-mini",
+            "api_base": "https://example.services.ai.azure.com/openai/v1/responses",
+        }
         mock_health.assert_awaited_once()
         assert sentinel_path.read_text() == '{"sentinel": "developer-state"}'
 
@@ -590,8 +592,9 @@ class TestRequiresBaseUrlValidation:
             )
 
         assert resp.status_code == 200
-        assert json.loads((tmp_path / "data" / "config.json").read_text())["provider"] == (
-            "openai"
-        )
+        assert json.loads((tmp_path / "data" / "config.json").read_text()) == {
+            "provider": "openai",
+            "model": "gpt-5-nano-2025-08-07",
+        }
         mock_health.assert_awaited_once()
         assert sentinel_path.read_text() == '{"sentinel": "developer-state"}'

@@ -359,6 +359,34 @@ def test_artifact_write_failure_marks_tailor_stage_failed(tmp_path: Path, monkey
     assert next(item for item in trace["stages"] if item["stage"] == "tailor:synthetic")["ok"] is False
 
 
+def test_judge_artifact_write_failure_marks_run_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from e2e_monitor import __main__ as cli
+    from unittest.mock import AsyncMock
+    save_config_file({"provider": "ollama", "model": "synthetic-model"})
+    monkeypatch.setenv("RM_E2E_MONITOR", "1")
+    monkeypatch.setattr(cli, "_ARTIFACTS", tmp_path / "bundles")
+    monkeypatch.setattr(cli, "_BASELINE", tmp_path / "missing.json")
+    monkeypatch.setattr(cli, "_jds", lambda: [("synthetic", "Python engineer")])
+    monkeypatch.setattr(Servers, "boot", lambda *args, **kwargs: {"frontend_up": False})
+    monkeypatch.setattr(Servers, "teardown", lambda *args: None)
+    monkeypatch.setattr(cli, "tailor", lambda *args, **kwargs: {"tailored": {}, "scores": {}, "tailored_resume_id": None})
+    monkeypatch.setattr(cli, "judge_variation", AsyncMock(return_value={"score": 5, "reasons": "Synthetic valid result"}))
+    real_write = Bundle.write_json
+
+    def write(path: Path, payload: Any) -> None:
+        if path.name == "judge.json":
+            raise OSError("synthetic disk full")
+        real_write(path, payload)
+
+    monkeypatch.setattr(Bundle, "write_json", staticmethod(write))
+    assert cli.main(["sweep", "--no-frontend"]) == 1
+    run = next((tmp_path / "bundles").iterdir())
+    trace = json.loads((run / "flow-trace.json").read_text())
+    assert next(item for item in trace["stages"] if item["stage"] == "judge:synthetic")["ok"] is False
+    assert trace["all_passed"] is False
+    assert json.loads((run / "summary.json").read_text())["flow_all_passed"] is False
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process-group regression")
 def test_teardown_stops_descendant_listener_even_when_parent_exits(tmp_path: Path) -> None:
     import signal

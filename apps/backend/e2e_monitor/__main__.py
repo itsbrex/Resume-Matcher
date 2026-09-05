@@ -126,23 +126,27 @@ def cmd_sweep(args: argparse.Namespace) -> int:
             except Exception:
                 _say(f"{jd_key}: tailoring failed; see backend log and flow trace")
                 continue
+            failed_judge = {
+                "score": None,
+                "reasons": "Judge failed to return a valid score.",
+            }
+            judge = failed_judge
             try:
                 with measured_step(
                     steps,
                     f"judge:{jd_key}",
                     on_error=bundle.write_diagnostic,
                 ):
-                    judge = asyncio.run(
-                        judge_variation(jd_text, result["tailored"], master)
-                    )
-                    if judge.get("score") is None:
-                        raise ValueError("Judge returned no valid score")
+                    try:
+                        judge = asyncio.run(
+                            judge_variation(jd_text, result["tailored"], master)
+                        )
+                        if judge.get("score") is None:
+                            raise ValueError("Judge returned no valid score")
+                    finally:
+                        bundle.write_json(vdir / "judge.json", judge)
             except Exception:
-                judge = {
-                    "score": None,
-                    "reasons": "Judge failed to return a valid score.",
-                }
-            bundle.write_json(vdir / "judge.json", judge)
+                judge = failed_judge
             render: dict[str, Any] = {"non_blank": None}
             try:
                 with measured_step(

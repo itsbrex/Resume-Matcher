@@ -47,15 +47,21 @@ def _validate_text_replacements(
     field_names: tuple[str, ...],
 ) -> dict[str, Any]:
     """Require a non-empty replacement list without coercing invalid leaves."""
-    field = next((name for name in field_names if name in result), None)
-    if field is None:
+    present_fields = [name for name in field_names if name in result]
+    if not present_fields:
         raise ValueError(f"LLM response is missing '{field_names[0]}'")
-    replacements = result[field]
-    if not isinstance(replacements, list) or not replacements:
-        raise ValueError(f"LLM response field '{field}' must be a non-empty list")
-    if any(not isinstance(item, str) or not item.strip() for item in replacements):
-        raise ValueError(f"LLM response field '{field}' must contain non-empty text")
-    return {**result, field_names[0]: [item.strip() for item in replacements]}
+    for field in present_fields:
+        replacements = result[field]
+        if isinstance(replacements, list) and replacements and all(
+            isinstance(item, str) and item.strip() for item in replacements
+        ):
+            return {
+                **result,
+                field_names[0]: [item.strip() for item in replacements],
+            }
+    raise ValueError(
+        f"LLM response fields {present_fields!r} must contain non-empty text lists"
+    )
 
 
 def _validate_enhancement_result(result: dict[str, Any]) -> dict[str, Any]:

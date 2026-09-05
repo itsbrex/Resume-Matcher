@@ -11,6 +11,7 @@ import pytest
 from app import llm
 from app.llm import LLMConfig
 from app.services import improver
+from app.routers import enrichment
 
 
 CONFIG = LLMConfig(provider="openai", model="gpt-4o", api_key="synthetic")
@@ -163,6 +164,73 @@ async def test_content_retry_repairs_malformed_optional_keyword_field(
             "lineNumber": None,
         }
     ]
+
+
+def test_enrichment_uses_valid_legacy_field_when_canonical_field_is_empty() -> None:
+    result = enrichment._validate_enhancement_result(
+        {
+            "additional_bullets": [],
+            "enhanced_description": ["Improved factual bullet"],
+        }
+    )
+
+    assert result["additional_bullets"] == ["Improved factual bullet"]
+
+
+async def test_prose_prefixed_top_level_array_gets_corrective_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router = AsyncMock()
+    array_response = _response([{"changes": []}])
+    array_response.choices[0].message.content = 'Here is the result: [{"changes": []}]'
+    router.acompletion.side_effect = [array_response, _response({"changes": []})]
+    monkeypatch.setattr(llm, "get_router", lambda _config=None: (router, CONFIG))
+    monkeypatch.setattr(llm, "_supports_json_mode", lambda _model: False)
+    result = await llm.complete_json("synthetic", retries=1, schema_type="diff")
+
+    assert result == {"changes": []}
+    assert router.acompletion.await_count == 2
+    retry_messages = router.acompletion.await_args_list[1].kwargs["messages"]
+    assert "Output ONLY a valid JSON object" in retry_messages[-1]["content"]
+
+
+async def test_validator_must_return_an_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router = AsyncMock()
+    router.acompletion.side_effect = [_response({"ok": True}), _response({"ok": True})]
+    monkeypatch.setattr(llm, "get_router", lambda _config=None: (router, CONFIG))
+    monkeypatch.setattr(llm, "_supports_json_mode", lambda _model: False)
+
+    with pytest.raises(ValueError, match="Response validator must return a JSON object"):
+        await llm.complete_json(
+            "synthetic",
+            retries=1,
+            response_validator=lambda _result: [],  # type: ignore[return-value]
+        )
+
+    assert router.acompletion.await_count == 2
+
+
+async def test_skill_plan_retries_non_text_strategy_notes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router = AsyncMock()
+    router.acompletion.side_effect = [
+        _response({"target_skills": [], "strategy_notes": False}),
+        _response({"target_skills": [], "strategy_notes": "Keep claims grounded"}),
+    ]
+    monkeypatch.setattr(llm, "get_router", lambda _config=None: (router, CONFIG))
+    monkeypatch.setattr(llm, "_supports_json_mode", lambda _model: False)
+
+    result = await llm.complete_json(
+        "synthetic",
+        retries=1,
+        response_validator=improver._validate_skill_plan_result,
+    )
+
+    assert result["strategy_notes"] == "Keep claims grounded"
+    assert router.acompletion.await_count == 2
 
 
 async def test_real_router_propagates_cancellation_without_retry(

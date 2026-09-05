@@ -1434,6 +1434,9 @@ def _extract_json(content: str, _depth: int = 0) -> str:
 
     # Try to find JSON object in the content (only if not already at start)
     start_idx = content.find("{")
+    array_idx = content.find("[")
+    if array_idx >= 0 and (start_idx < 0 or array_idx < start_idx):
+        raise ValueError("Expected a JSON object, received a top-level array")
     if start_idx > 0:
         # Only recurse if { is found after position 0 to avoid infinite recursion
         return _extract_json(content[start_idx:], _depth + 1)
@@ -1564,6 +1567,8 @@ async def complete_json(
                 raise ValueError("Expected a JSON object")
             if response_validator is not None:
                 result = response_validator(result)
+                if not isinstance(result, dict):
+                    raise ValueError("Response validator must return a JSON object")
 
             # LLM-001: Check if parsed result appears truncated
             if _appears_truncated(result, schema_type):
@@ -1621,6 +1626,10 @@ async def complete_json(
             # Content quality — empty response, JSON extraction failure
             logging.warning(f"Content extraction failed (attempt {attempt + 1}): {e}")
             if attempt < retries:
+                messages[-1]["content"] = (
+                    prompt
+                    + "\n\nIMPORTANT: Output ONLY a valid JSON object that satisfies every requested field and type."
+                )
                 continue
             raise
 

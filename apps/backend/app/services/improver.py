@@ -98,10 +98,14 @@ def _validate_skill_plan_result(result: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("Skill targets cannot be blank")
         normalized.append({"skill": skill, "reason": reason})
 
+    raw_notes = result.get("strategy_notes", "")
+    if not isinstance(raw_notes, str):
+        raise ValueError("Skill plan strategy_notes must be text")
+
     return {
         **result,
         "target_skills": normalized,
-        "strategy_notes": str(result.get("strategy_notes", "")),
+        "strategy_notes": raw_notes.strip(),
     }
 
 

@@ -69,6 +69,10 @@ export default function ResumeViewerPage() {
     isCurrent: isCurrentResumeLoad,
     invalidate: invalidateResumeLoad,
   } = useOperationOwner(resumeId);
+  const { begin: beginRetry, isCurrent: isCurrentRetry } = useOperationOwner(resumeId);
+  const { begin: beginRename, isCurrent: isCurrentRename } = useOperationOwner(resumeId);
+  const { begin: beginDownload, isCurrent: isCurrentDownload } = useOperationOwner(resumeId);
+  const { begin: beginDelete, isCurrent: isCurrentDelete } = useOperationOwner(resumeId);
 
   const localizedResumeData = useMemo(() => {
     if (!resumeData) return null;
@@ -78,6 +82,17 @@ export default function ResumeViewerPage() {
   useEffect(() => {
     if (!resumeId) return;
     setShowEnrichmentModal(false);
+    setIsRetrying(false);
+    setIsDownloading(false);
+    renameBusyRef.current = false;
+    setIsEditingTitle(false);
+    setEditingTitleValue('');
+    setRenameError(null);
+    setDownloadError(null);
+    setDeleteError(null);
+    setShowDeleteDialog(false);
+    setShowDeleteSuccessDialog(false);
+    setShowDownloadSuccessDialog(false);
     const token = beginResumeLoad();
     if (token === null) return;
 
@@ -130,9 +145,12 @@ export default function ResumeViewerPage() {
 
   const handleRetryProcessing = async () => {
     if (!resumeId) return;
+    const token = beginRetry();
+    if (token === null) return;
     setIsRetrying(true);
     try {
       const result = await retryProcessing(resumeId);
+      if (!isCurrentRetry(token)) return;
       setProcessingStatus(result.processing_status);
       if (result.processing_status === 'ready') {
         // Reload the page to show the processed resume
@@ -147,19 +165,21 @@ export default function ResumeViewerPage() {
         );
       }
     } catch (err) {
-      console.error('Retry processing failed:', err);
       if (err instanceof Error && err.message.includes('status 404')) {
-        setProcessingStatus(null);
-        setError(t('common.resumeDeleted'));
         if (localStorage.getItem('master_resume_id') === resumeId) {
           localStorage.removeItem('master_resume_id');
           setHasMasterResume(false);
         }
+        if (!isCurrentRetry(token)) return;
+        setProcessingStatus(null);
+        setError(t('common.resumeDeleted'));
       } else {
+        if (!isCurrentRetry(token)) return;
+        console.error('Retry processing failed:', err);
         setError(t('resumeViewer.errors.processingFailed'));
       }
     } finally {
-      setIsRetrying(false);
+      if (isCurrentRetry(token)) setIsRetrying(false);
     }
   };
 
@@ -178,18 +198,22 @@ export default function ResumeViewerPage() {
       setIsEditingTitle(false);
       return;
     }
+    const token = beginRename();
+    if (token === null) return;
     renameBusyRef.current = true;
     setIsEditingTitle(false);
     try {
       setRenameError(null);
       await renameResume(resumeId, trimmed);
+      if (!isCurrentRename(token)) return;
       setResumeTitle(trimmed);
       setIsEditingTitle(false);
     } catch (err) {
+      if (!isCurrentRename(token)) return;
       console.error('Failed to rename resume:', err);
       setRenameError(t('resumeViewer.errors.failedToRename'));
     } finally {
-      renameBusyRef.current = false;
+      if (isCurrentRename(token)) renameBusyRef.current = false;
     }
   };
 
@@ -231,14 +255,18 @@ export default function ResumeViewerPage() {
   };
 
   const handleDownload = async () => {
+    const token = beginDownload();
+    if (token === null) return;
     setIsDownloading(true);
     try {
       setDownloadError(null);
       const blob = await downloadResumePdf(resumeId, undefined, uiLanguage);
       const filename = sanitizeFilename(resumeTitle, resumeId, 'resume');
       downloadBlobAsFile(blob, filename);
+      if (!isCurrentDownload(token)) return;
       setShowDownloadSuccessDialog(true);
     } catch (err) {
+      if (!isCurrentDownload(token)) return;
       console.error('Failed to download resume:', err);
       if (err instanceof TypeError && err.message.includes('Failed to fetch')) {
         const fallbackUrl = getResumePdfUrl(resumeId, undefined, uiLanguage);
@@ -250,23 +278,27 @@ export default function ResumeViewerPage() {
       }
       setDownloadError(t('resumeViewer.errors.failedToDownload'));
     } finally {
-      setIsDownloading(false);
+      if (isCurrentDownload(token)) setIsDownloading(false);
     }
   };
 
   const handleDeleteResume = async () => {
+    const token = beginDelete();
+    if (token === null) return;
     try {
       setDeleteError(null);
       await deleteResume(resumeId);
       // Update cached counters
       decrementResumes();
-      if (isMasterResume) {
+      if (localStorage.getItem('master_resume_id') === resumeId) {
         localStorage.removeItem('master_resume_id');
         setHasMasterResume(false);
       }
+      if (!isCurrentDelete(token)) return;
       setShowDeleteDialog(false);
       setShowDeleteSuccessDialog(true);
     } catch (err) {
+      if (!isCurrentDelete(token)) return;
       console.error('Failed to delete resume:', err);
       setDeleteError(t('resumeViewer.errors.failedToDelete'));
       setShowDeleteDialog(false);

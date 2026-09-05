@@ -481,6 +481,9 @@ _MD_DATE_RE = re.compile(
     r"|Present|Current|Now|Ongoing))?",
     re.IGNORECASE,
 )
+_MONTH_RE = re.compile(
+    r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)", re.IGNORECASE
+)
 
 
 def _extract_markdown_dates(markdown: str) -> list[str]:
@@ -498,68 +501,94 @@ def restore_dates_from_markdown(
     becomes "2020 - 2021"). This function extracts all month-inclusive dates
     from the raw markdown and replaces year-only entries where a match exists.
     """
-    md_dates = _extract_markdown_dates(markdown)
-    if not md_dates:
+
+    def date_key(value: str) -> str:
+        years = re.findall(r"\d{4}", value)
+        if not years:
+            return ""
+        suffix = (
+            "current"
+            if re.search(r"\b(?:present|current|now|ongoing)\b", value, re.IGNORECASE)
+            else ""
+        )
+        return " - ".join([*years, suffix] if suffix else years)
+
+    occurrences: list[tuple[str, str, str, str]] = []
+    lines = markdown.splitlines()
+    for line_index, line in enumerate(lines):
+        line_context = line.casefold()
+        nearby_context = " ".join(lines[max(0, line_index - 2) : line_index]).casefold()
+        for match in _MD_DATE_RE.finditer(line):
+            full_date = re.sub(r"\s*[-–—]\s*", " - ", match.group(0).strip())
+            key = date_key(full_date)
+            if key:
+                occurrences.append((key, full_date, line_context, nearby_context))
+    if not occurrences:
         return parsed_data
 
-    # Build a lookup: "2020 - 2021" → "Jun 2020 - Aug 2021"
-    year_to_full: dict[str, str] = {}
-    year_only_re = re.compile(r"\d{4}")
-    for md_date in md_dates:
-        years_in_date = year_only_re.findall(md_date)
-        if years_in_date:
-            # Create year-only key like "2020 - 2021" or "2023"
-            year_key = " - ".join(years_in_date)
-            # Keep the first (most specific) match
-            if year_key not in year_to_full:
-                # Normalize separators
-                normalized = re.sub(r"\s*[-–—]\s*", " - ", md_date.strip())
-                year_to_full[year_key] = normalized
-
-    if not year_to_full:
-        return parsed_data
-
+    used: set[int] = set()
     patched = 0
-    for section_key in ("workExperience", "education", "personalProjects"):
-        for entry in parsed_data.get(section_key, []):
-            if not isinstance(entry, dict):
-                continue
-            years = entry.get("years", "")
-            if not isinstance(years, str) or not years:
-                continue
-            # Skip if already has months
-            if re.search(
-                r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)",
-                years,
-                re.IGNORECASE,
-            ):
-                continue
-            # Try to find a matching month-inclusive date
-            if years in year_to_full:
-                entry["years"] = year_to_full[years]
-                patched += 1
 
-    # Custom sections
+    def restore_entry(entry: Any, identity_fields: tuple[str, ...]) -> None:
+        nonlocal patched
+        if not isinstance(entry, dict):
+            return
+        years = entry.get("years", "")
+        if not isinstance(years, str) or not years or _MONTH_RE.search(years):
+            return
+        key = date_key(years)
+        candidates = [
+            index
+            for index, occurrence in enumerate(occurrences)
+            if occurrence[0] == key and index not in used
+        ]
+        if not candidates:
+            return
+        selected: int | None = candidates[0] if len(candidates) == 1 else None
+        if len(candidates) > 1:
+            terms = [
+                " ".join(str(entry.get(field, "")).split()).casefold()
+                for field in identity_fields
+                if str(entry.get(field, "")).strip()
+            ]
+            scored = []
+            for index in candidates:
+                line_context = occurrences[index][2]
+                nearby_context = occurrences[index][3]
+                score = sum(
+                    10 if term in line_context else 1 if term in nearby_context else 0
+                    for term in terms
+                )
+                scored.append((score, index))
+            best_score = max(score for score, _ in scored)
+            best = [index for score, index in scored if score == best_score]
+            if best_score > 0 and len(best) == 1:
+                selected = best[0]
+        if selected is None:
+            logger.info("Date restoration left ambiguous value unchanged: %s", years)
+            return
+        entry["years"] = occurrences[selected][1]
+        used.add(selected)
+        patched += 1
+
+    for section_key, identity_fields in (
+        ("workExperience", ("company", "title")),
+        ("education", ("institution", "degree")),
+        ("personalProjects", ("name", "role")),
+    ):
+        for entry in parsed_data.get(section_key, []):
+            restore_entry(entry, identity_fields)
+
     custom = parsed_data.get("customSections", {})
     if isinstance(custom, dict):
         for section in custom.values():
-            if not isinstance(section, dict) or section.get("sectionType") != "itemList":
+            if (
+                not isinstance(section, dict)
+                or section.get("sectionType") != "itemList"
+            ):
                 continue
             for item in section.get("items", []):
-                if not isinstance(item, dict):
-                    continue
-                years = item.get("years", "")
-                if not isinstance(years, str) or not years:
-                    continue
-                if re.search(
-                    r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)",
-                    years,
-                    re.IGNORECASE,
-                ):
-                    continue
-                if years in year_to_full:
-                    item["years"] = year_to_full[years]
-                    patched += 1
+                restore_entry(item, ("title", "subtitle"))
 
     if patched:
         logger.info("Restored months in %d date fields from raw markdown", patched)

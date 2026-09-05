@@ -158,6 +158,33 @@ except Exception as e:
     raise ValueError("LLM completion failed. Please check your API configuration.")
 ```
 
+## Resume Grounding and Preservation
+
+Prompt instructions are only the first layer of the resume truthfulness contract.
+Every AI-authored whole-resume result passes through
+`app.services.resume_preservation.finalize_ai_resume` before it can be previewed
+or saved. The finalizer matches entries by their nonzero ID, then by stable
+section-specific identity fields. It restores omitted entries, protected
+identity and date fields, and row styles from the matched source entry. It also
+removes extra narrative rows and new numeric claims that have no source
+evidence.
+
+Legitimate rephrasing remains editable. A substantial narrative rewrite with
+weak source overlap is returned from preview with a stable
+`GROUNDING_REVIEW_REQUIRED` warning, and confirmation is the user's explicit
+approval. The legacy direct-improve route has no review step, so it restores
+weakly grounded rewrites before saving. Content the user added before tailoring
+is part of the source evidence.
+
+Technical skills are the bounded exception: required or preferred JD skills
+may be added only after the existing skill-target and master-alignment checks
+admit them. Original skill-list items are always retained. Other additional
+lists do not accept AI-invented entries.
+
+Confirmation validates section and entry preservation again before persistence.
+Warnings expose stable codes and field paths; provider and calculation exception
+details stay in server logs.
+
 ## Adding Prompts
 
 Add new prompt templates to `apps/backend/app/prompts/templates.py`.

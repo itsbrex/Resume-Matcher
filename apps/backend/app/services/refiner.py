@@ -27,6 +27,7 @@ from app.schemas.refinement import (
     RefinementConfig,
     RefinementResult,
 )
+from app.services.resume_preservation import finalize_ai_resume
 
 logger = logging.getLogger(__name__)
 
@@ -111,15 +112,23 @@ async def refine_resume(
                 keyword_analysis.injectable_keywords,
             )
             try:
+                before = _deep_copy(current)
                 current = await inject_keywords(
                     current,
                     keyword_analysis.injectable_keywords,
                     master_resume,
                     job_description,
                 )
-                passes += 1
+                current = finalize_ai_resume(initial_tailored, current)
+                if current != before:
+                    passes += 1
             except Exception as e:
                 logger.warning("Keyword injection failed: %s", e)
+
+    # The keyword writer is the last whole-resume author. Re-apply the source
+    # contract immediately after it so later deterministic cleanup and
+    # alignment can still remove disallowed content.
+    current = finalize_ai_resume(initial_tailored, current)
 
     # Pass 2: AI phrase removal and polish (local, no LLM call)
     if config.enable_ai_phrase_removal:

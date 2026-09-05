@@ -28,7 +28,6 @@ from app.preview import (
     resume_fingerprint,
 )
 
-logger = logging.getLogger(__name__)
 from app.schemas import (
     ATSScore,
     ATSSubScores,
@@ -75,6 +74,11 @@ from app.services.improver import (
     verify_diff_result,
 )
 from app.services.refiner import refine_resume, calculate_keyword_match
+from app.services.resume_preservation import (
+    finalize_ai_resume,
+    grounding_review_warnings,
+    validate_confirmed_resume,
+)
 from app.services.ats import compute_ats_score
 from app.schemas.refinement import RefinementConfig
 from app.services.cover_letter import (
@@ -84,6 +88,10 @@ from app.services.cover_letter import (
 )
 from app.services.interview_prep import generate_interview_prep
 from app.prompts import DEFAULT_IMPROVE_PROMPT_ID, IMPROVE_PROMPT_OPTIONS
+
+logger = logging.getLogger(__name__)
+REFINEMENT_FAILED_WARNING = "REFINEMENT_FAILED: Resume refinement was unavailable; the previous result was kept."
+DIFF_UNAVAILABLE_WARNING = "DIFF_UNAVAILABLE: Resume changes could not be calculated."
 
 
 async def _auto_create_tracker_application(
@@ -535,7 +543,7 @@ def _calculate_diff_from_resume(
         return summary, changes, None
     except Exception as e:
         logger.warning("Skipping resume diff due to calculation failure: %s", e)
-        return None, None, f"calculation_error: {str(e)}"
+        return None, None, "calculation_error"
 
 
 def _validate_confirm_payload(
@@ -571,6 +579,11 @@ def _validate_confirm_payload(
     ]
     if mismatches:
         raise ValueError(f"personalInfo fields changed: {', '.join(mismatches)}")
+    preservation_violations = validate_confirmed_resume(original_data, improved_data)
+    if preservation_violations:
+        raise ValueError(
+            "source preservation failed: " + ", ".join(preservation_violations)
+        )
 
 
 async def _generate_auxiliary_messages(
@@ -1160,7 +1173,13 @@ async def _improve_preview_flow(
     except Exception as e:
         logger.warning("Refinement failed, using unrefined result: %s", e)
         if refinement_attempted:
-            response_warnings.append(f"Refinement failed: {str(e)}")
+            response_warnings.append(REFINEMENT_FAILED_WARNING)
+
+    if original_resume_data:
+        improved_data = finalize_ai_resume(original_resume_data, improved_data)
+        response_warnings.extend(
+            grounding_review_warnings(original_resume_data, improved_data)
+        )
 
     improved_text = json.dumps(improved_data, indent=2)
     preview_hash = _hash_improved_data(improved_data)
@@ -1184,7 +1203,7 @@ async def _improve_preview_flow(
         improved_data,
     )
     if diff_error:
-        response_warnings.append(f"Could not calculate changes: {diff_error}")
+        response_warnings.append(DIFF_UNAVAILABLE_WARNING)
 
     request_id = str(uuid4())
     return ImproveResumeResponse(
@@ -1274,7 +1293,12 @@ async def improve_resume_confirm_endpoint(
             resume, improved_data
         )
         if diff_error:
-            response_warnings.append(f"Could not calculate changes: {diff_error}")
+            response_warnings.append(DIFF_UNAVAILABLE_WARNING)
+        original_data = _get_original_resume_data(resume)
+        if original_data:
+            response_warnings.extend(
+                grounding_review_warnings(original_data, improved_data)
+            )
 
         # The durable claim lasts longer than the bounded external work. Other
         # workers return a retryable conflict instead of duplicating generation.
@@ -1529,7 +1553,18 @@ async def improve_resume_endpoint(
         except Exception as e:
             logger.warning("Refinement failed, using unrefined result: %s", e)
             if refinement_attempted:
-                response_warnings.append(f"Refinement failed: {str(e)}")
+                response_warnings.append(REFINEMENT_FAILED_WARNING)
+
+        if original_resume_data:
+            review_warnings = grounding_review_warnings(
+                original_resume_data, improved_data
+            )
+            improved_data = finalize_ai_resume(
+                original_resume_data,
+                improved_data,
+                allow_review_claims=False,
+            )
+            response_warnings.extend(review_warnings)
 
         # Convert improved data to JSON string for storage
         improved_text = json.dumps(improved_data, indent=2)
@@ -1540,7 +1575,7 @@ async def improve_resume_endpoint(
             improved_data,
         )
         if diff_error:
-            response_warnings.append(f"Could not calculate changes: {diff_error}")
+            response_warnings.append(DIFF_UNAVAILABLE_WARNING)
 
         # Generate improvement suggestions
         improvements = generate_improvements(job_keywords)

@@ -1,5 +1,7 @@
 """Integration tests for resume CRUD endpoints."""
 
+from typing import Any
+
 import json
 from unittest.mock import patch, AsyncMock, MagicMock
 from uuid import uuid4
@@ -291,7 +293,14 @@ class TestRetryProcessing:
 
     @patch("app.routers.resumes.parse_resume_to_json", new_callable=AsyncMock)
     @patch("app.routers.resumes.db", new_callable=AsyncMock)
-    async def test_retry_successful(self, mock_db, mock_parse, client, mock_resume_record, sample_resume):
+    async def test_retry_successful(
+        self,
+        mock_db: AsyncMock,
+        mock_parse: AsyncMock,
+        client: AsyncClient,
+        mock_resume_record: dict[str, Any],
+        sample_resume: dict[str, Any],
+    ) -> None:
         failed_record = {**mock_resume_record, "processing_status": "failed"}
         mock_db.get_resume.return_value = failed_record
         mock_db.claim_resume_processing.return_value = "token-1"
@@ -313,7 +322,14 @@ class TestRetryProcessing:
 
     @patch("app.routers.resumes.parse_resume_to_json", new_callable=AsyncMock)
     @patch("app.routers.resumes.db", new_callable=AsyncMock)
-    async def test_retry_empty_legacy_ready_resume(self, mock_db, mock_parse, client, mock_resume_record, sample_resume):
+    async def test_retry_empty_legacy_ready_resume(
+        self,
+        mock_db: AsyncMock,
+        mock_parse: AsyncMock,
+        client: AsyncClient,
+        mock_resume_record: dict[str, Any],
+        sample_resume: dict[str, Any],
+    ) -> None:
         empty_ready_record = {
             **mock_resume_record,
             "processing_status": "ready",
@@ -331,8 +347,13 @@ class TestRetryProcessing:
     @patch("app.routers.resumes.parse_resume_to_json", new_callable=AsyncMock)
     @patch("app.routers.resumes.db", new_callable=AsyncMock)
     async def test_retry_legacy_ready_resume_with_schema_defaults(
-        self, mock_db, mock_parse, client, mock_resume_record, sample_resume
-    ):
+        self,
+        mock_db: AsyncMock,
+        mock_parse: AsyncMock,
+        client: AsyncClient,
+        mock_resume_record: dict[str, Any],
+        sample_resume: dict[str, Any],
+    ) -> None:
         legacy_default_record = {
             **mock_resume_record,
             "processing_status": "ready",
@@ -372,12 +393,15 @@ class TestRetryProcessing:
             processed_data=sample_resume,
         )
 
-
     @patch("app.routers.resumes.parse_resume_to_json", new_callable=AsyncMock)
     @patch("app.routers.resumes.db", new_callable=AsyncMock)
     async def test_retry_returns_404_when_resume_deleted_mid_retry(
-        self, mock_db, mock_parse, client, mock_resume_record
-    ):
+        self,
+        mock_db: AsyncMock,
+        mock_parse: AsyncMock,
+        client: AsyncClient,
+        mock_resume_record: dict[str, Any],
+    ) -> None:
         """A compare-and-set miss for a deleted retry target yields 404."""
         mock_db.get_resume.return_value = {
             **mock_resume_record,
@@ -396,8 +420,12 @@ class TestRetryProcessing:
     @patch("app.routers.resumes.parse_resume_to_json", new_callable=AsyncMock)
     @patch("app.routers.resumes.db", new_callable=AsyncMock)
     async def test_retry_does_not_swallow_unrelated_value_errors(
-        self, mock_db, mock_parse, client, mock_resume_record
-    ):
+        self,
+        mock_db: AsyncMock,
+        mock_parse: AsyncMock,
+        client: AsyncClient,
+        mock_resume_record: dict[str, Any],
+    ) -> None:
         """Only ResumeNotFoundError becomes a 404; other ValueErrors propagate."""
         mock_db.get_resume.return_value = {
             **mock_resume_record,

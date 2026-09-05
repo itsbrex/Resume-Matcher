@@ -1,5 +1,7 @@
 """Integration tests for configuration endpoints."""
 
+from collections.abc import Iterator
+
 import json
 from pathlib import Path
 from unittest.mock import patch, AsyncMock
@@ -7,6 +9,7 @@ from unittest.mock import patch, AsyncMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.database import Database
 from app.main import app
 
 
@@ -394,7 +397,9 @@ class TestEncryptedApiKeys:
     """Per-provider keys are encrypted at rest, independent, and never leak."""
 
     @pytest.fixture
-    def keys_env(self, isolated_db, tmp_path, monkeypatch):
+    def keys_env(
+        self, isolated_db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> Iterator[Database]:
         """Isolate the key store (temp DB), config.json, and crypto secret."""
         from app import crypto
         from app.config import settings

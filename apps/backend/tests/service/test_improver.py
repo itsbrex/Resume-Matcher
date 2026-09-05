@@ -111,7 +111,12 @@ class TestGenerateResumeDiffs:
         assert len(result.changes) == 0
 
     @patch("app.services.improver.complete_json", new_callable=AsyncMock)
-    async def test_handles_missing_changes_key(self, mock_llm, sample_resume, sample_job_keywords):
+    async def test_handles_missing_changes_key(
+        self,
+        mock_llm: AsyncMock,
+        sample_resume: dict[str, Any],
+        sample_job_keywords: dict[str, Any],
+    ) -> None:
         """A full-resume payload cannot masquerade as a zero-diff success."""
         mock_llm.return_value = {"summary": "Full resume output instead of diffs"}
         with pytest.raises(ValueError, match="missing 'changes'"):
@@ -322,7 +327,12 @@ class TestGenerateResumeDiffsEdgeCases:
         assert "# Markdown with Jan 2020" in prompt
 
     @patch("app.services.improver.complete_json", new_callable=AsyncMock)
-    async def test_non_list_changes_from_llm(self, mock_llm, sample_resume, sample_job_keywords):
+    async def test_non_list_changes_from_llm(
+        self,
+        mock_llm: AsyncMock,
+        sample_resume: dict[str, Any],
+        sample_job_keywords: dict[str, Any],
+    ) -> None:
         """LLM changes must remain an explicit list."""
         mock_llm.return_value = {"changes": "not a list", "strategy_notes": "broken"}
         with pytest.raises(ValueError):

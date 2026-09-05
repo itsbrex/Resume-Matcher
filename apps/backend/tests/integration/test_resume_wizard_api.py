@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 from httpx import ASGITransport, AsyncClient
 
+from app.database import Database
 from app.main import app
 from app.schemas.resume_wizard import ResumeWizardHistoryEntry, ResumeWizardQuestion
 from app.services.resume_wizard import (
@@ -91,7 +92,9 @@ async def test_turn_answer_without_answer_is_422(isolated_db) -> None:
     assert response.status_code == 422
 
 
-async def test_turn_malformed_model_envelope_is_recoverable_422(isolated_db) -> None:
+async def test_turn_malformed_model_envelope_is_recoverable_422(
+    isolated_db: Database,
+) -> None:
     transport = ASGITransport(app=app)
     state = build_initial_wizard_state()
     state.step = "question"

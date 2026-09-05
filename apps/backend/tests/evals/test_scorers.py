@@ -10,6 +10,8 @@ end-to-end checks: the good tailoring must pass every scorer, the bad one must
 trip the relevant scorers.
 """
 
+from typing import Any
+
 import copy
 
 import pytest
@@ -176,7 +178,7 @@ class TestGoldenCasesStructural:
     """The golden good/bad tailorings must score exactly as designed."""
 
     @pytest.mark.parametrize("case", GOLDEN_CASES, ids=lambda c: c["name"])
-    def test_good_tailoring_passes_every_scorer(self, case):
+    def test_good_tailoring_passes_every_scorer(self, case: dict[str, Any]) -> None:
         original = case["original"]
         good = case["tailored_good"]
         assert is_valid_resume(original) is True

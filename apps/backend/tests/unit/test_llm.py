@@ -410,7 +410,7 @@ class TestAppearsTruncated:
 
     # --- resume schema ---
 
-    def test_resume_empty_work_experience(self):
+    def test_resume_empty_work_experience(self) -> None:
         """A candidate can legitimately have no work experience."""
         data = {
             "personalInfo": {"name": "John"},
@@ -420,7 +420,7 @@ class TestAppearsTruncated:
         }
         assert _appears_truncated(data, schema_type="resume") is False
 
-    def test_resume_empty_education(self):
+    def test_resume_empty_education(self) -> None:
         """A candidate can legitimately omit education entries."""
         data = {
             "personalInfo": {"name": "John"},
@@ -430,7 +430,7 @@ class TestAppearsTruncated:
         }
         assert _appears_truncated(data, schema_type="resume") is False
 
-    def test_resume_empty_skills(self):
+    def test_resume_empty_skills(self) -> None:
         """An empty optional skill list is schema-valid."""
         data = {
             "personalInfo": {"name": "John"},
@@ -505,7 +505,7 @@ class TestAppearsTruncated:
 
     # --- default / unknown schema ---
 
-    def test_default_schema_acts_like_resume(self):
+    def test_default_schema_acts_like_resume(self) -> None:
         """Default resume handling leaves usefulness to its caller validator."""
         data = {"workExperience": [], "education": [{"degree": "BS"}]}
         assert _appears_truncated(data) is False

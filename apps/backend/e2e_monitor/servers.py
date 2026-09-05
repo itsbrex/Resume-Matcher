@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -112,6 +113,11 @@ class Servers:
             key: os.environ[key]
             for key in (
                 "PATH",
+                "HOME",
+                "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+                "http_proxy", "https_proxy", "all_proxy",
+                "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE",
+                "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
                 "SYSTEMROOT",
                 "TMPDIR",
                 "LANG",
@@ -128,10 +134,20 @@ class Servers:
                 "LLM_API_BASE": selected.api_base or "",
                 "REASONING_EFFORT": selected.reasoning_effort or "",
                 "FRONTEND_BASE_URL": self.frontend_url,
-                "NO_PROXY": "127.0.0.1,localhost",
+                "NO_PROXY": ",".join(filter(None, [os.environ.get("NO_PROXY", os.environ.get("no_proxy", "")), "127.0.0.1", "localhost"])),
             }
         )
         return env
+
+    def _open_process_log(self, name: str) -> Any:
+        path = self.bundle.logs_dir / name
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.fchmod(descriptor, 0o600)
+            return os.fdopen(descriptor, "w")
+        except BaseException:
+            os.close(descriptor)
+            raise
 
     def boot(self, *, with_frontend: bool = True) -> dict[str, bool]:
         try:
@@ -140,7 +156,7 @@ class Servers:
                     f"Backend port {self.backend_port} is already in use; monitor requires its own port."
                 )
             env = self._prepare_environment()
-            be_log = (self.bundle.logs_dir / "backend.log").open("w")
+            be_log = self._open_process_log("backend.log")
             self.log_files.append(be_log)
             self.procs.append(
                 subprocess.Popen(
@@ -158,6 +174,7 @@ class Servers:
                     stdout=be_log,
                     stderr=subprocess.STDOUT,
                     env=env,
+                    start_new_session=os.name != "nt",
                 )
             )
             if not self._wait(f"{self.api_base}/health", timeout_s=60):
@@ -168,7 +185,7 @@ class Servers:
                     raise RuntimeError(
                         f"Frontend port {self.frontend_port} is already in use; monitor requires its own port."
                     )
-                fe_log = (self.bundle.logs_dir / "frontend.log").open("w")
+                fe_log = self._open_process_log("frontend.log")
                 self.log_files.append(fe_log)
                 frontend_env = {
                     **env,
@@ -182,6 +199,7 @@ class Servers:
                         stdout=fe_log,
                         stderr=subprocess.STDOUT,
                         env=frontend_env,
+                        start_new_session=os.name != "nt",
                     )
                 )
                 self.frontend_up = self._wait(self.frontend_url, timeout_s=120)
@@ -194,7 +212,14 @@ class Servers:
 
     def teardown(self) -> None:
         for proc in reversed(self.procs):
-            if proc.poll() is None:
+            if os.name != "nt" and isinstance(proc.pid, int):
+                try:
+                    os.killpg(proc.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            elif os.name == "nt" and isinstance(proc.pid, int):
+                subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, check=False)
+            elif proc.poll() is None:
                 proc.terminate()
         for proc in reversed(self.procs):
             try:
@@ -202,6 +227,14 @@ class Servers:
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait(timeout=10)
+            finally:
+                # npm may exit before its Next descendant. Reap the whole
+                # owned session, including children that ignored SIGTERM.
+                if os.name != "nt" and isinstance(proc.pid, int):
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
         self.procs.clear()
         for log in self.log_files:
             log.close()

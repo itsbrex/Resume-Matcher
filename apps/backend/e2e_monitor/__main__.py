@@ -121,8 +121,8 @@ def cmd_sweep(args: argparse.Namespace) -> int:
                     result = tailor(
                         resume_id, jd_text, keywords, master, api_base=servers.api_base
                     )
-                bundle.write_json(vdir / "tailored.json", result["tailored"])
-                bundle.write_json(vdir / "scores.json", result["scores"])
+                    bundle.write_json(vdir / "tailored.json", result["tailored"])
+                    bundle.write_json(vdir / "scores.json", result["scores"])
             except Exception:
                 _say(f"{jd_key}: tailoring failed; see backend log and flow trace")
                 continue
@@ -221,12 +221,19 @@ def cmd_update_baseline(args: argparse.Namespace) -> int:
     return 0
 
 
+def _port_number(value: str) -> int:
+    port = int(value)
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("Port must be between 1 and 65535")
+    return port
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="e2e_monitor")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sweep = sub.add_parser("sweep")
-    sweep.add_argument("--backend-port", type=int, default=8000)
-    sweep.add_argument("--frontend-port", type=int, default=3000)
+    sweep.add_argument("--backend-port", type=_port_number, default=8000)
+    sweep.add_argument("--frontend-port", type=_port_number, default=3000)
     sweep.add_argument("--no-frontend", action="store_true")
     sweep.set_defaults(func=cmd_sweep)
     ub = sub.add_parser("update-baseline")

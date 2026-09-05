@@ -20,12 +20,23 @@ def build_judge_prompt(
     job_description: str, tailored: dict[str, Any], original: dict[str, Any]
 ) -> str:
     """Keep original evidence visible to both monitor and paid eval judges."""
-    return (
-        f"{_RUBRIC}\n\n=== ORIGINAL RESUME (JSON) ===\n"
-        f"{json.dumps(original, ensure_ascii=False, indent=2)}\n\n"
-        f"=== JOB DESCRIPTION ===\n{job_description}\n\n"
-        f"=== TAILORED RESUME (JSON) ===\n{json.dumps(tailored, ensure_ascii=False, indent=2)}\n"
-    )
+    from app.services.improver import _sanitize_user_input
+
+    def sanitize(value: Any) -> Any:
+        if isinstance(value, str):
+            return _sanitize_user_input(value)
+        if isinstance(value, list):
+            return [sanitize(item) for item in value]
+        if isinstance(value, dict):
+            return {key: sanitize(item) for key, item in value.items()}
+        return value
+
+    return json.dumps(sanitize({
+        "original_resume": original,
+        "job_description": job_description,
+        "tailored_resume": tailored,
+    }), ensure_ascii=False)
+
 
 
 def _normalize_score(raw: Any) -> int | None:
@@ -61,7 +72,7 @@ async def judge_variation(
     prompt = build_judge_prompt(job_description, tailored, original)
     result = await complete_json(
         prompt,
-        system_prompt="You are an impartial resume-tailoring evaluator.",
+        system_prompt=_RUBRIC,
         max_tokens=512,
         schema_type="keywords",  # Freeform JSON; resume/enrichment shape heuristics do not apply.
     )

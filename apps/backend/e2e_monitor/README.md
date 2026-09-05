@@ -92,7 +92,7 @@ Result: approximately zero random cloners' agents will ever run or even see the 
 
 `seed_master_db` awaits creation and close against `data/resume_matcher.db`. The server reads that exact file. Non-secret run settings are allowlisted; developer JSON, uploads, resumes, database and encryption secret are never copied wholesale. After the opt-in gate, the parent resolves the selected effective key (including encrypted-store-only or environment credentials), re-encrypts only that key with a fresh run secret, and writes it to the isolated key table. Both the run key table and secret are removed at teardown, including handled boot failures and interruption. A hard process kill can bypass cleanup; treat an interrupted run's `data/` directory as private until removed. This harness does not claim secure erasure of filesystem blocks.
 
-Child processes inherit a small environment allowlist and explicit selected settings, not arbitrary provider-key environment variables. Keyless local providers stay keyless. The monitor owns every server it uses: an occupied port fails explicitly rather than reusing or stopping another process. Defaults remain8000/3000; isolated runs can use:
+Child processes inherit a small environment allowlist and explicit selected settings, not arbitrary provider-key environment variables. Keyless local providers stay keyless. The monitor owns every server it uses: an occupied port fails explicitly rather than reusing or stopping another process. Defaults remain 8000/3000; isolated runs can use:
 
 ```bash
 RM_E2E_MONITOR=1 uv run python -m e2e_monitor sweep --backend-port 18000 --frontend-port 13000
@@ -100,7 +100,7 @@ RM_E2E_MONITOR=1 uv run python -m e2e_monitor sweep --backend-port 18000 --front
 RM_E2E_MONITOR=1 uv run python -m e2e_monitor sweep --backend-port 18000 --no-frontend
 ```
 
-Stage records contain measured monotonic elapsed milliseconds. Success, failure, cancellation and skipped rendering are explicit. Trace/summary files are written during cleanup even after seed/boot aborts. A sweep with a failed stage exits1; it is still not a CI/push gate. The judge receives original evidence, JD and generated resume, and invalid scores are failures. Scores are heuristic evidence, not commercial ATS measurements or proof that a model is truthful.
+Stage records contain measured monotonic elapsed milliseconds. Success, failure, cancellation and skipped rendering are explicit. Trace/summary files are written during cleanup even after seed/boot aborts. A sweep with a failed stage exits 1; it is still not a CI/push gate. The judge receives original evidence, JD and generated resume, and invalid scores are failures. Scores are heuristic evidence, not commercial ATS measurements or proof that a model is truthful.
 
 `flow-trace.json`, `summary.json`, and failed `judge.json` records expose only stable
 error classes or generic failure text. Full local tracebacks are appended to
@@ -111,3 +111,5 @@ report, and redact any excerpt before sharing it. The traceback log is intended 
 maintainer diagnosis after the public artifacts identify a failed stage.
 
 Deterministic tests use synthetic keys/data and owned loopback ports: `tests/unit/test_monitor_servers.py` exercises real child startup/configuration, public seed→tailor→confirm sweep, port conflicts and teardown. Only AI boundaries are replaced; no live provider or paid request occurs. The scorer/accounting tests cover term boundaries, per-key custom sections, meaningful content, and actual versus merely attempted refinement.
+
+Captured `backend.log` and `frontend.log` are owner-only private diagnostics (0600), alongside `private-diagnostics.log`. These raw process logs can contain provider details; exclude them when sharing a public evidence bundle.

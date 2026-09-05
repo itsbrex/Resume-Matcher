@@ -301,7 +301,89 @@ def test_frontend_proxy_targets_the_owned_backend(
     servers = Servers(bundle, backend_port=18000, frontend_port=13000)
     try:
         assert servers.boot()["frontend_up"] is True
+        assert commands[0]["start_new_session"] is (os.name != "nt")
+        assert (bundle.logs_dir / "backend.log").stat().st_mode & 0o777 == 0o600
+        assert (bundle.logs_dir / "frontend.log").stat().st_mode & 0o777 == 0o600
         assert commands[1]["env"]["BACKEND_ORIGIN"] == "http://127.0.0.1:18000"
         assert commands[0]["env"]["FRONTEND_BASE_URL"] == "http://127.0.0.1:13000"
     finally:
         servers.teardown()
+
+
+@pytest.mark.parametrize("port", ["0", "-1", "65536"])
+def test_cli_rejects_invalid_ports_before_boot(port: str) -> None:
+    from e2e_monitor.__main__ import main
+    with pytest.raises(SystemExit) as error:
+        main(["sweep", "--backend-port", port])
+    assert error.value.code == 2
+
+
+def test_server_environment_preserves_connectivity_not_ambient_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    save_config_file({"provider": "ollama", "model": "synthetic-model"})
+    bundle = Bundle(tmp_path, "connectivity")
+    bundle.ensure()
+    servers = Servers(bundle)
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9000")
+    monkeypatch.setenv("SSL_CERT_FILE", "/synthetic/cert.pem")
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-not-selected")
+    try:
+        env = servers._prepare_environment()
+        assert env["HTTPS_PROXY"] == "http://127.0.0.1:9000"
+        assert env["SSL_CERT_FILE"] == "/synthetic/cert.pem"
+        assert "OPENAI_API_KEY" not in env
+    finally:
+        servers.teardown()
+
+
+def test_artifact_write_failure_marks_tailor_stage_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from e2e_monitor import __main__ as cli
+    save_config_file({"provider": "ollama", "model": "synthetic-model"})
+    monkeypatch.setenv("RM_E2E_MONITOR", "1")
+    monkeypatch.setattr(cli, "_ARTIFACTS", tmp_path)
+    monkeypatch.setattr(cli, "_BASELINE", tmp_path / "missing.json")
+    monkeypatch.setattr(cli, "_jds", lambda: [("synthetic", "Python engineer")])
+    monkeypatch.setattr(Servers, "boot", lambda *args, **kwargs: {"frontend_up": False})
+    monkeypatch.setattr(Servers, "teardown", lambda *args: None)
+    monkeypatch.setattr(cli, "tailor", lambda *args, **kwargs: {"tailored": {}, "scores": {}})
+    real_write = Bundle.write_json
+
+    def write(path: Path, payload: Any) -> None:
+        if path.name == "tailored.json":
+            raise OSError("synthetic disk full")
+        real_write(path, payload)
+
+    monkeypatch.setattr(Bundle, "write_json", staticmethod(write))
+    assert cli.main(["sweep", "--no-frontend"]) == 1
+    run = next(path for path in tmp_path.iterdir() if path.is_dir())
+    trace = json.loads((run / "flow-trace.json").read_text())
+    assert next(item for item in trace["stages"] if item["stage"] == "tailor:synthetic")["ok"] is False
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group regression")
+def test_teardown_stops_descendant_listener_even_when_parent_exits(tmp_path: Path) -> None:
+    import signal
+    import time
+    from e2e_monitor.servers import _port_is_free
+    bundle = Bundle(tmp_path, "descendants")
+    bundle.ensure()
+    port = free_port()
+    child = "import signal,socket,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); s=socket.socket(); s.bind(('127.0.0.1', %d)); s.listen(); print('ready', flush=True); time.sleep(30)" % port
+    parent = "import subprocess,sys,time; subprocess.Popen([sys.executable, '-c', %r]); time.sleep(30)" % child
+    process = subprocess.Popen([sys.executable, "-c", parent], start_new_session=True, stdout=subprocess.PIPE)
+    servers = Servers(bundle, procs=[process])
+    try:
+        assert process.stdout is not None and process.stdout.readline().strip() == b"ready"
+        assert not _port_is_free(port)
+        servers.teardown()
+        deadline = time.monotonic() + 2
+        while not _port_is_free(port) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert _port_is_free(port)
+    finally:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait(timeout=5)
+        if process.stdout is not None:
+            process.stdout.close()

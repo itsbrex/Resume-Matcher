@@ -174,7 +174,11 @@ def jd_keywords_present(tailored: dict, keywords: list[str]) -> float:
         1
         for kw in keywords
         if kw.strip()
-        and re.search(rf"(?<!\w){re.escape(kw.strip().lower())}(?!\w)", haystack)
+        and (
+            kw.strip().lower() in haystack
+            if re.search(r"[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]", kw)
+            else re.search(rf"(?<!\w){re.escape(kw.strip().lower())}(?!\w)", haystack)
+        )
     )
     return hits / len(keywords)
 

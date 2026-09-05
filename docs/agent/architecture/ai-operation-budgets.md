@@ -6,7 +6,7 @@
 
 `app/ai_budget.py` stores an absolute monotonic deadline in a ContextVar. Nested budgets retain the earliest deadline. Completion and JSON calls cap their existing model/token-dependent transport timeout to the remaining budget. Content retries recalculate remaining time. Enrichment analysis no longer imposes a separate fixed 180-second ceiling. The outer task cancels provider retries and queued item work when the operation expires; HTTP clients receive a generic 504 and server logs identify the route and elapsed time. Explicit caller cancellation propagates unchanged.
 
-Cancellation is cooperative. Synchronous validation or a noninterruptible converter thread cannot be forcibly stopped by an asyncio timer. Owned resource cleanup may finish after the work deadline; upload and PDF cleanup policies must retain their capacity reservations until those resources have actually stopped.
+Cancellation is cooperative. Synchronous validation or a noninterruptible converter thread cannot be forcibly stopped by an asyncio timer. Owned resource cleanup may finish after the work deadline; upload and PDF cleanup policies retain their capacity reservations until those resources have actually stopped. A cancelled upload/retry settles any in-flight processing claim and marks only its owned attempt failed. It cannot recreate a deleted row or retire a newer retry.
 
 ## Input policy
 

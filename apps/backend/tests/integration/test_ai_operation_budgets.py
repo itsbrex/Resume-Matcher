@@ -335,3 +335,101 @@ async def test_caller_cancellation_propagates_without_waiting_for_deadline(
         with pytest.raises(asyncio.CancelledError):
             await task
     assert cancelled.is_set()
+
+
+@pytest.mark.parametrize("retry", [False, True])
+@pytest.mark.parametrize("concurrent", ["none", "retry", "delete"])
+async def test_parse_deadline_marks_only_owned_processing_attempt_failed(
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_db: Any,
+    retry: bool,
+    concurrent: str,
+) -> None:
+    entered = asyncio.Event()
+    newer_token: str | None = None
+
+    async def parse(_text: str) -> dict[str, Any]:
+        nonlocal newer_token
+        entered.set()
+        records = await isolated_db.list_resumes()
+        resume_id = records[0]["resume_id"]
+        if concurrent == "retry":
+            newer_token = await isolated_db.claim_resume_processing(resume_id)
+        elif concurrent == "delete":
+            await isolated_db.delete_resume(resume_id)
+        await asyncio.sleep(10)
+        return {}
+
+    monkeypatch.setattr(settings, "request_timeout_seconds", 0.2)
+    monkeypatch.setattr(resumes, "parse_resume_to_json", parse)
+    monkeypatch.setattr(
+        resumes, "parse_document", AsyncMock(return_value="Synthetic resume")
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        if retry:
+            record = await isolated_db.create_resume_atomic_master(
+                content="Synthetic resume",
+                content_type="md",
+                processing_status="failed",
+            )
+            response = await client.post(
+                f"/api/v1/resumes/{record['resume_id']}/retry-processing"
+            )
+        else:
+            response = await client.post(
+                "/api/v1/resumes/upload",
+                files={"file": ("test.pdf", b"%PDF-1.4 synthetic", "application/pdf")},
+            )
+    assert entered.is_set()
+    assert response.status_code == 504
+    records = await isolated_db.list_resumes()
+    if concurrent == "delete":
+        assert records == []
+        return
+    assert len(records) == 1
+    assert records[0]["processing_status"] == (
+        "processing" if newer_token else "failed"
+    )
+    from sqlalchemy import select
+    from app.models import Resume
+
+    async with isolated_db._session() as session:
+        row = await session.scalar(
+            select(Resume).where(Resume.resume_id == records[0]["resume_id"])
+        )
+        assert row is not None
+        assert row.processing_token == newer_token
+
+
+async def test_deadline_during_claim_retires_committed_owner_before_returning(
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_db: Any,
+) -> None:
+    claim = isolated_db.claim_resume_processing
+
+    async def slow_claim(*args: Any, **kwargs: Any) -> str | None:
+        token = await claim(*args, **kwargs)
+        await asyncio.sleep(0.1)
+        return token
+
+    monkeypatch.setattr(settings, "request_timeout_seconds", 0.04)
+    monkeypatch.setattr(isolated_db, "claim_resume_processing", slow_claim)
+    monkeypatch.setattr(
+        resumes, "parse_document", AsyncMock(return_value="Synthetic resume")
+    )
+    parse = AsyncMock(side_effect=AssertionError("Expired operation must not parse"))
+    monkeypatch.setattr(resumes, "parse_resume_to_json", parse)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/v1/resumes/upload",
+            files={"file": ("test.pdf", b"%PDF-1.4 synthetic", "application/pdf")},
+        )
+    assert response.status_code == 504
+    parse.assert_not_awaited()
+    records = await isolated_db.list_resumes()
+    assert len(records) == 1
+    assert records[0]["processing_status"] == "failed"

@@ -734,6 +734,50 @@ def _require_processing_commit(
     )
 
 
+async def _await_processing_cleanup(task: asyncio.Task[Any]) -> Any:
+    """Drain an owned database action despite repeated caller cancellation."""
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            continue
+        except Exception:
+            break
+    return task.result()
+
+
+async def _finish_cancelled_processing(resume_id: str, processing_token: str) -> None:
+    """Retire only this attempt, awaiting its cleanup even after cancellation."""
+    cleanup = asyncio.create_task(
+        db.finish_resume_processing(
+            resume_id, processing_token, processing_status="failed"
+        )
+    )
+    try:
+        await _await_processing_cleanup(cleanup)
+    except Exception:
+        logger.exception("Failed to retire cancelled processing for %s", resume_id)
+
+
+async def _claim_processing(
+    resume_id: str, *, allow_ready_at: str | None = None
+) -> str | None:
+    """Recover ownership when cancellation arrives during a committed claim."""
+    claim = asyncio.create_task(
+        db.claim_resume_processing(resume_id, allow_ready_at=allow_ready_at)
+    )
+    try:
+        return await asyncio.shield(claim)
+    except asyncio.CancelledError:
+        try:
+            token = await _await_processing_cleanup(claim)
+            if token is not None:
+                await _finish_cancelled_processing(resume_id, token)
+        except Exception:
+            logger.exception("Failed to settle cancelled processing claim for %s", resume_id)
+        raise
+
+
 @router.post("/upload", response_model=ResumeUploadResponse)
 async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
     """Upload and process a resume file (PDF/DOCX).
@@ -801,7 +845,7 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
     )
 
     try:
-        processing_token = await db.claim_resume_processing(resume["resume_id"])
+        processing_token = await _claim_processing(resume["resume_id"])
     except ResumeNotFoundError as e:
         raise HTTPException(
             status_code=404, detail="Resume was deleted during upload processing."
@@ -812,49 +856,53 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
             detail="Resume processing was superseded by a newer attempt.",
         )
 
-    # Try to parse to structured JSON (optional, may fail if LLM not configured)
     try:
-        processed_data = await parse_resume_to_json(markdown_content)
-    except DatabaseBusyError:
-        raise
-    except Exception as e:
-        logger.warning(f"Resume parsing to JSON failed for {file.filename}: {e}")
-        outcome = await db.finish_resume_processing(
-            resume["resume_id"],
-            processing_token,
-            processing_status="failed",
-        )
-        _require_processing_commit(
-            outcome,
-            deleted_detail="Resume was deleted during upload processing.",
-        )
-        resume["processing_status"] = "failed"
-    else:
-        outcome = await db.finish_resume_processing(
-            resume["resume_id"],
-            processing_token,
-            processing_status="ready",
-            processed_data=processed_data,
-        )
-        _require_processing_commit(
-            outcome,
-            deleted_detail="Resume was deleted during upload processing.",
-        )
-        resume["processed_data"] = processed_data
-        resume["processing_status"] = "ready"
+        # Try to parse to structured JSON (optional, may fail if LLM not configured)
+        try:
+            processed_data = await parse_resume_to_json(markdown_content)
+        except DatabaseBusyError:
+            raise
+        except Exception as e:
+            logger.warning(f"Resume parsing to JSON failed for {file.filename}: {e}")
+            outcome = await db.finish_resume_processing(
+                resume["resume_id"],
+                processing_token,
+                processing_status="failed",
+            )
+            _require_processing_commit(
+                outcome,
+                deleted_detail="Resume was deleted during upload processing.",
+            )
+            resume["processing_status"] = "failed"
+        else:
+            outcome = await db.finish_resume_processing(
+                resume["resume_id"],
+                processing_token,
+                processing_status="ready",
+                processed_data=processed_data,
+            )
+            _require_processing_commit(
+                outcome,
+                deleted_detail="Resume was deleted during upload processing.",
+            )
+            resume["processed_data"] = processed_data
+            resume["processing_status"] = "ready"
 
-    # Return accurate status to client (API-001 fix)
-    return ResumeUploadResponse(
-        message=(
-            f"File {file.filename} uploaded successfully"
-            if resume["processing_status"] == "ready"
-            else f"File {file.filename} uploaded but parsing failed"
-        ),
-        request_id=str(uuid4()),
-        resume_id=resume["resume_id"],
-        processing_status=resume["processing_status"],
-        is_master=resume.get("is_master", False),
-    )
+        # Return accurate status to client (API-001 fix)
+        return ResumeUploadResponse(
+            message=(
+                f"File {file.filename} uploaded successfully"
+                if resume["processing_status"] == "ready"
+                else f"File {file.filename} uploaded but parsing failed"
+            ),
+            request_id=str(uuid4()),
+            resume_id=resume["resume_id"],
+            processing_status=resume["processing_status"],
+            is_master=resume.get("is_master", False),
+        )
+    except asyncio.CancelledError:
+        await _finish_cancelled_processing(resume["resume_id"], processing_token)
+        raise
 
 
 @router.get("", response_model=ResumeFetchResponse)
@@ -1898,7 +1946,7 @@ async def retry_processing(resume_id: str) -> ResumeUploadResponse:
     require_source_size(markdown_content)
     allow_ready_at = resume.get("updated_at") if can_retry_legacy_empty_ready else None
     try:
-        processing_token = await db.claim_resume_processing(
+        processing_token = await _claim_processing(
             resume_id,
             allow_ready_at=allow_ready_at,
         )
@@ -1913,45 +1961,49 @@ async def retry_processing(resume_id: str) -> ResumeUploadResponse:
         )
 
     try:
-        processed_data = await parse_resume_to_json(markdown_content)
-    except DatabaseBusyError:
+        try:
+            processed_data = await parse_resume_to_json(markdown_content)
+        except DatabaseBusyError:
+            raise
+        except Exception as e:
+            logger.warning(f"Retry processing failed for resume {resume_id}: {e}")
+            outcome = await db.finish_resume_processing(
+                resume_id,
+                processing_token,
+                processing_status="failed",
+            )
+            _require_processing_commit(
+                outcome,
+                deleted_detail="Resume was deleted during retry.",
+            )
+            return ResumeUploadResponse(
+                message="Retry processing failed",
+                request_id=str(uuid4()),
+                resume_id=resume_id,
+                processing_status="failed",
+                is_master=resume.get("is_master", False),
+            )
+        else:
+            outcome = await db.finish_resume_processing(
+                resume_id,
+                processing_token,
+                processing_status="ready",
+                processed_data=processed_data,
+            )
+            _require_processing_commit(
+                outcome,
+                deleted_detail="Resume was deleted during retry.",
+            )
+            return ResumeUploadResponse(
+                message="Resume processing succeeded on retry",
+                request_id=str(uuid4()),
+                resume_id=resume_id,
+                processing_status="ready",
+                is_master=resume.get("is_master", False),
+            )
+    except asyncio.CancelledError:
+        await _finish_cancelled_processing(resume_id, processing_token)
         raise
-    except Exception as e:
-        logger.warning(f"Retry processing failed for resume {resume_id}: {e}")
-        outcome = await db.finish_resume_processing(
-            resume_id,
-            processing_token,
-            processing_status="failed",
-        )
-        _require_processing_commit(
-            outcome,
-            deleted_detail="Resume was deleted during retry.",
-        )
-        return ResumeUploadResponse(
-            message="Retry processing failed",
-            request_id=str(uuid4()),
-            resume_id=resume_id,
-            processing_status="failed",
-            is_master=resume.get("is_master", False),
-        )
-    else:
-        outcome = await db.finish_resume_processing(
-            resume_id,
-            processing_token,
-            processing_status="ready",
-            processed_data=processed_data,
-        )
-        _require_processing_commit(
-            outcome,
-            deleted_detail="Resume was deleted during retry.",
-        )
-        return ResumeUploadResponse(
-            message="Resume processing succeeded on retry",
-            request_id=str(uuid4()),
-            resume_id=resume_id,
-            processing_status="ready",
-            is_master=resume.get("is_master", False),
-        )
 
 
 @router.patch("/{resume_id}/cover-letter")

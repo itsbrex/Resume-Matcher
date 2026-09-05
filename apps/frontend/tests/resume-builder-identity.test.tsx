@@ -29,9 +29,10 @@ vi.mock('@/lib/api/resume', () => ({
   fetchJobDescription: vi.fn(() => Promise.resolve(null)),
 }));
 
-vi.mock('@/lib/i18n', () => ({
-  useTranslations: () => ({ t: (key: string) => key }),
-}));
+vi.mock('@/lib/i18n', () => {
+  const t = (key: string) => key;
+  return { useTranslations: () => ({ t }) };
+});
 
 vi.mock('@/lib/context/language-context', () => ({
   useLanguage: () => ({ uiLanguage: 'en', contentLanguage: 'en' }),
@@ -142,6 +143,55 @@ const setDraft = (id: string, data: ResumeData) =>
   );
 
 describe('builder document ownership', () => {
+  it('discards a new-resume draft without changing the fresh baseline', async () => {
+    currentSearch = '';
+    localStorage.setItem(
+      'resume_builder_draft:new',
+      JSON.stringify({
+        resumeId: null,
+        data: { ...REAL_RESUME, summary: 'discarded draft' },
+        updatedAt: Date.now(),
+      })
+    );
+    const Builder = await importBuilder();
+    render(<Builder />);
+    await tick();
+    const baseline = screen.getByTestId('summary').textContent;
+    await act(async () => {
+      screen.getByRole('button', { name: 'builder.discardChanges' }).click();
+    });
+    expect(localStorage.getItem('resume_builder_draft:new')).toBeNull();
+    expect(screen.getByTestId('summary').textContent).toBe(baseline);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await tick(20_000);
+    expect(updateResume).not.toHaveBeenCalled();
+  });
+
+  it('asks before restoring a new-resume local draft and keeps it local after consent', async () => {
+    currentSearch = '';
+    localStorage.setItem(
+      'resume_builder_draft:new',
+      JSON.stringify({
+        resumeId: null,
+        updatedAt: Date.now(),
+        data: { ...REAL_RESUME, summary: 'unsaved new draft' },
+      })
+    );
+    const Builder = await importBuilder();
+    render(<Builder />);
+    await tick(20_000);
+    expect(
+      screen.getByRole('button', { name: 'builder.draftRecovery.restoreDraft' })
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('summary')).not.toHaveTextContent('unsaved new draft');
+    expect(updateResume).not.toHaveBeenCalled();
+    await act(async () => {
+      screen.getByRole('button', { name: 'builder.draftRecovery.restoreDraft' }).click();
+    });
+    expect(screen.getByTestId('summary')).toHaveTextContent('unsaved new draft');
+    await tick(20_000);
+    expect(updateResume).not.toHaveBeenCalled();
+  });
   it.each([
     ['automatic', 'success'],
     ['manual', 'success'],

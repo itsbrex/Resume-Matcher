@@ -118,6 +118,7 @@
     "draftRecovery": {
       "title": "¿Restaurar borrador local?",
       "description": "Un borrador local del navegador es diferente de la copia guardada en el servidor. Restáuralo para seguir editando o usa la copia del servidor y descarta el borrador local.",
+      "newDescription": "Este navegador tiene un borrador de currículum sin guardar. Restáuralo para seguir editando o descártalo para empezar de nuevo.",
       "restoreDraft": "Restaurar borrador",
       "useServer": "Usar copia del servidor"
     },

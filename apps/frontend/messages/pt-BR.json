@@ -118,6 +118,7 @@
     "draftRecovery": {
       "title": "Restaurar rascunho local?",
       "description": "Um rascunho local do navegador é diferente da cópia salva no servidor. Restaure-o para continuar editando ou use a cópia do servidor e descarte o rascunho local.",
+      "newDescription": "Este navegador tem um rascunho de currículo não salvo. Restaure-o para continuar editando ou descarte-o para começar de novo.",
       "restoreDraft": "Restaurar rascunho",
       "useServer": "Usar cópia do servidor"
     },

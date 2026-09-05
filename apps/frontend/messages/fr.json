@@ -118,6 +118,7 @@
     "draftRecovery": {
       "title": "Restaurer le brouillon local ?",
       "description": "Un brouillon local du navigateur diffère de la copie enregistrée sur le serveur. Restaurez-le pour continuer l'édition, ou utilisez la copie du serveur et supprimez le brouillon local.",
+      "newDescription": "Ce navigateur contient un brouillon de CV non enregistré. Restaurez-le pour continuer à le modifier, ou supprimez-le pour recommencer.",
       "restoreDraft": "Restaurer le brouillon",
       "useServer": "Utiliser la copie serveur"
     },

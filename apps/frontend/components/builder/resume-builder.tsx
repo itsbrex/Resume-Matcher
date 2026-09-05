@@ -515,11 +515,7 @@ const ResumeBuilderContent = () => {
       // Priority 3: Restore from localStorage (browser refresh recovery)
       const savedDraft = readStoredResumeDraft(resumeId);
       if (savedDraft) {
-        setResumeData(savedDraft.data);
-        setLastSavedData(savedDraft.data);
-        setHasUnsavedChanges(true); // This path only handles a new, unsaved resume.
-        editVersionRef.current += 1;
-        unsyncedSinceRef.current = Date.now();
+        setPendingDraftRestore(savedDraft);
         setLoadingState('loaded');
         return;
       }
@@ -1550,9 +1546,11 @@ const ResumeBuilderContent = () => {
         open={pendingDraftRestore !== null}
         onOpenChange={() => undefined}
         title={t('builder.draftRecovery.title')}
-        description={t('builder.draftRecovery.description')}
+        description={t(
+          resumeId ? 'builder.draftRecovery.description' : 'builder.draftRecovery.newDescription'
+        )}
         confirmLabel={t('builder.draftRecovery.restoreDraft')}
-        cancelLabel={t('builder.draftRecovery.useServer')}
+        cancelLabel={t(resumeId ? 'builder.draftRecovery.useServer' : 'builder.discardChanges')}
         variant="warning"
         closeOnConfirm={false}
         onConfirm={handleRestoreLocalDraft}

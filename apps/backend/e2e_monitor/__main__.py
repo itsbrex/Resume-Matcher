@@ -91,7 +91,9 @@ def cmd_sweep(args: argparse.Namespace) -> int:
     )
     _say(f"e2e-monitor: run {bundle.run_id}")
     try:
-        with measured_step(steps, "seed-master") as step:
+        with measured_step(
+            steps, "seed-master", on_error=bundle.write_diagnostic
+        ) as step:
             raw_master = json.loads(
                 (_FIXTURES / "master.json").read_text(encoding="utf-8")
             )
@@ -99,7 +101,7 @@ def cmd_sweep(args: argparse.Namespace) -> int:
             resume_id = asyncio.run(seed_master_db(bundle.data_dir, master))
             bundle.write_json(bundle.master_dir / "processed_data.json", master)
             step["detail"] = {"resume_id": resume_id}
-        with measured_step(steps, "boot") as step:
+        with measured_step(steps, "boot", on_error=bundle.write_diagnostic) as step:
             step["detail"] = servers.boot(with_frontend=not args.no_frontend)
 
         for jd_key, jd_text in _jds():
@@ -111,7 +113,11 @@ def cmd_sweep(args: argparse.Namespace) -> int:
                 if kw.istitle() and kw.lower() not in _STOPWORDS
             ][:8]
             try:
-                with measured_step(steps, f"tailor:{jd_key}"):
+                with measured_step(
+                    steps,
+                    f"tailor:{jd_key}",
+                    on_error=bundle.write_diagnostic,
+                ):
                     result = tailor(
                         resume_id, jd_text, keywords, master, api_base=servers.api_base
                     )
@@ -121,7 +127,11 @@ def cmd_sweep(args: argparse.Namespace) -> int:
                 _say(f"{jd_key}: tailoring failed; see backend log and flow trace")
                 continue
             try:
-                with measured_step(steps, f"judge:{jd_key}"):
+                with measured_step(
+                    steps,
+                    f"judge:{jd_key}",
+                    on_error=bundle.write_diagnostic,
+                ):
                     judge = asyncio.run(
                         judge_variation(jd_text, result["tailored"], master)
                     )
@@ -135,7 +145,11 @@ def cmd_sweep(args: argparse.Namespace) -> int:
             bundle.write_json(vdir / "judge.json", judge)
             render: dict[str, Any] = {"non_blank": None}
             try:
-                with measured_step(steps, f"render:{jd_key}") as step:
+                with measured_step(
+                    steps,
+                    f"render:{jd_key}",
+                    on_error=bundle.write_diagnostic,
+                ) as step:
                     if servers.frontend_up and result["tailored_resume_id"]:
                         pdf, render = render_variation(
                             result["tailored_resume_id"], api_base=servers.api_base
@@ -161,7 +175,7 @@ def cmd_sweep(args: argparse.Namespace) -> int:
             )
     finally:
         try:
-            with measured_step(steps, "teardown"):
+            with measured_step(steps, "teardown", on_error=bundle.write_diagnostic):
                 servers.teardown()
         finally:
             flow = build_flow_trace(steps)

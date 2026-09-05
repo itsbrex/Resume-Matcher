@@ -164,20 +164,27 @@ def test_public_sweep_runs_real_http_flow_with_owned_backend(
     script.write_text(
         """
 import sys
+from typing import Any
 import uvicorn
 from app.main import app
 from app.routers import resumes
 from app.schemas.refinement import RefinementResult
 from app.schemas import ImproveDiffResult
-async def keywords(*args, **kwargs):
-    return {'required_skills': ['Python'], 'preferred_skills': [], 'keywords': ['backend']}
-async def targets(*args, **kwargs):
+async def keywords(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    return {
+        'required_skills': ['Python'],
+        'preferred_skills': [],
+        'keywords': ['backend'],
+    }
+async def targets(*args: Any, **kwargs: Any) -> dict[str, list[Any]]:
     return {'targets': []}
-async def diffs(*args, **kwargs):
+async def diffs(*args: Any, **kwargs: Any) -> ImproveDiffResult:
     return ImproveDiffResult(changes=[])
-async def refine(*args, **kwargs):
+async def refine(*args: Any, **kwargs: Any) -> RefinementResult:
     return RefinementResult(refined_data=kwargs['initial_tailored'])
-async def auxiliary(*args, **kwargs):
+async def auxiliary(
+    *args: Any, **kwargs: Any
+) -> tuple[None, None, str, None, list[str]]:
     return None, None, 'Synthetic backend role', None, []
 resumes.extract_job_keywords = keywords
 resumes.generate_skill_target_plan = targets
@@ -257,7 +264,17 @@ def test_public_sweep_persists_stage_failure_and_teardown_on_abort(
     assert boot["ok"] is False
     assert boot["cancelled"] == isinstance(failure, KeyboardInterrupt)
     assert boot["ms"] >= 0
-    assert (run / "summary.json").exists()
+    public_text = "\n".join(
+        (run / name).read_text() for name in ("flow-trace.json", "summary.json")
+    )
+    if str(failure):
+        assert str(failure) not in public_text
+
+    diagnostic_path = run / "logs" / "private-diagnostics.log"
+    diagnostic = diagnostic_path.read_text()
+    assert type(failure).__name__ in diagnostic
+    if str(failure):
+        assert str(failure) in diagnostic
 
 
 def test_frontend_proxy_targets_the_owned_backend(

@@ -49,6 +49,16 @@ JSON completions include 2 automatic retries with progressively lower temperatur
 - Attempt 1: temperature 0.1
 - Attempt 2: temperature 0.0
 
+## Temperature Support
+
+`_supports_temperature()` determines whether `temperature` is sent at all. Capability comes from LiteLLM's model registry, with overrides for restrictions the registry does not record.
+
+The gpt-5 family is one such restriction. The registry lists `temperature` as a supported parameter, which is accurate, but only the default value of 1 is accepted ([litellm#13397](https://github.com/BerriAI/litellm/issues/13397)). This holds on OpenAI and on Azure alike.
+
+The override matches on model name rather than provider. Azure gpt-5 deployments resolve to `azure/` prefixed names, and a self-hosted `openai_compatible` model under a custom name is absent from the registry and already treated as unsupported before the override runs.
+
+`_get_retry_temperature()` therefore returns `None` for gpt-5, omitting the parameter so the provider applies its own default.
+
 ## JSON Extraction
 
 Robust bracket-matching algorithm in `_extract_json()` handles:

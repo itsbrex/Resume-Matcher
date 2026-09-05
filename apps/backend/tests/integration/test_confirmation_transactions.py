@@ -194,24 +194,26 @@ async def test_changed_inputs_invalidate_unconfirmed_preview(
 
 
 @pytest.mark.parametrize("model", [Resume, Improvement])
+@pytest.mark.parametrize("phase", ["before_insert", "after_insert"])
 async def test_required_insert_failure_rolls_back_the_confirmation(
     isolated_db: Database,
     confirmation_client: AsyncClient,
     sample_resume: dict[str, Any],
     model: type[Resume] | type[Improvement],
+    phase: str,
 ) -> None:
     payload = await preview_payload(isolated_db, confirmation_client, sample_resume)
 
     def reject(_mapper: Mapper[Any], _connection: Connection, _target: Any) -> None:
         raise RuntimeError("synthetic required insert failure")
 
-    event.listen(model, "before_insert", reject)
+    event.listen(model, phase, reject)
     try:
         response = await confirmation_client.post(
             "/api/v1/resumes/improve/confirm", json=payload
         )
     finally:
-        event.remove(model, "before_insert", reject)
+        event.remove(model, phase, reject)
     assert response.status_code == 500
     assert len(await isolated_db.list_resumes()) == 1
     async with isolated_db._session() as session:

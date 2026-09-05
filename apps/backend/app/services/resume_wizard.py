@@ -3,6 +3,7 @@
 import copy
 import json
 import re
+from collections import Counter
 from collections.abc import Callable
 from typing import Any, Protocol
 
@@ -204,22 +205,38 @@ def _merge_entries[T: _IdentifiedEntry](
             id_index.setdefault(item.id, position)
         signature_index.setdefault(key(item), position)
     raw_items = raw_updated if isinstance(raw_updated, list) else []
+    zero_id_full_echo = (
+        len(existing) > 1
+        and len(updated) == len(existing)
+        and all(
+            isinstance(raw_item, dict) and raw_item.get("id") == 0
+            for raw_item in raw_items
+        )
+        and Counter(key(item) for item in updated)
+        == Counter(key(item) for item in existing)
+    )
     for item_index, item in enumerate(updated):
         raw_item = raw_items[item_index] if item_index < len(raw_items) else None
         has_explicit_id = isinstance(raw_item, dict) and "id" in raw_item
-        position = id_index.get(item.id) if item.id > 0 else None
-        if position is None and item.id <= 0 and not has_explicit_id:
+        position = id_index.pop(item.id, None) if item.id > 0 else None
+        if position is None and item.id <= 0 and (
+            not has_explicit_id or zero_id_full_echo
+        ):
             position = signature_index.get(key(item))
         if position is not None:
+            previous_key = key(result[position])
+            if signature_index.get(previous_key) == position:
+                signature_index.pop(previous_key)
             item.id = result[position].id
             result[position] = item
-            signature_index.setdefault(key(item), position)
+            signature_index[key(item)] = position
             continue
 
         # A positive id unknown to the current draft is not stable identity.
         # Treat it as add intent and let the allocator choose a collision-free id.
         item.id = 0
         result.append(item)
+        signature_index.setdefault(key(item), len(result) - 1)
     return result
 
 

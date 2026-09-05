@@ -21,6 +21,18 @@ Backend: GET /resumes/{id}/pdf
 | `/print/resumes/[id]` | `.resume-print` | Resume PDF |
 | `/print/cover-letter/[id]` | `.cover-letter-print` | Cover letter PDF |
 
+## Renderer Limits
+
+| Environment variable | Default | Supported range | Purpose |
+|----------------------|---------|-----------------|---------|
+| `PDF_MAX_CONCURRENCY` | 4 | 1-16 | Maximum active exports; excess requests fail immediately instead of queueing |
+| `PDF_RENDER_TIMEOUT_SECONDS` | 75 | 1-600 | Total export lifetime, including browser/page creation and cleanup |
+| `PDF_CLEANUP_RESERVE_SECONDS` | 5 | 0.1-30 | Portion of the total lifetime reserved for resource cleanup |
+
+The renderer replaces a disconnected cached browser automatically. On Windows
+event loops that require the thread fallback, a cancelled or timed-out request
+continues to occupy its concurrency slot until its bounded worker exits.
+
 ## Query Parameters
 
 | Param | Default | Range |

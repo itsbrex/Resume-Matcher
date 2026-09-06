@@ -10,6 +10,8 @@ Cancellation is cooperative. Synchronous validation or a noninterruptible conver
 
 Upload/retry waits at most five additional seconds for processing-claim retirement, including repeated caller cancellation. A stalled database action stays in a tracked background task, holding its transaction until it settles; a late claim's task also retires the returned token. The request can return while cleanup continues, and cleanup still cannot overwrite a newer attempt.
 
+SQLite contention during completion returns retryable HTTP 503 and starts the same owned retirement. Its background task retries only database-busy failures, releasing each failed transaction before backing off; the caller's five-second cleanup limit remains unchanged. Retirement ends when the attempt is marked failed, deleted, or superseded. A claim that fails before acquiring a token does not retire another worker's existing ownership.
+
 ## Input policy
 
 Oversized input is rejected rather than silently truncated. Schema and stored-source failures return 422 before the relevant AI stage.

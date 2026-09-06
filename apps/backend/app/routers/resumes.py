@@ -809,12 +809,24 @@ async def _await_processing_cleanup(task: asyncio.Task[Any]) -> Any:
     return task.result()
 
 
+async def _retire_processing_attempt(resume_id: str, processing_token: str) -> None:
+    """Keep retrying contention until this attempt is retired or superseded."""
+    while True:
+        try:
+            await db.finish_resume_processing(
+                resume_id, processing_token, processing_status="failed"
+            )
+            return
+        except DatabaseBusyError:
+            # Each failed reservation closes its session. Back off without
+            # holding a transaction; the tracked task still owns retirement.
+            await asyncio.sleep(0.1)
+
+
 async def _finish_cancelled_processing(resume_id: str, processing_token: str) -> None:
     """Retire only this attempt, deferring a stalled cleanup after a bounded wait."""
     cleanup = asyncio.create_task(
-        db.finish_resume_processing(
-            resume_id, processing_token, processing_status="failed"
-        )
+        _retire_processing_attempt(resume_id, processing_token)
     )
     try:
         await _await_processing_cleanup(cleanup)
@@ -837,9 +849,7 @@ async def _claim_processing(
         async def retire_claim() -> None:
             token = await claim
             if token is not None:
-                await db.finish_resume_processing(
-                    resume_id, token, processing_status="failed"
-                )
+                await _retire_processing_attempt(resume_id, token)
 
         retirement = asyncio.create_task(retire_claim())
         try:
@@ -973,7 +983,12 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
             processing_status=resume["processing_status"],
             is_master=resume.get("is_master", False),
         )
-    except (asyncio.CancelledError, AIOperationDeadlineExceeded, PromptSizeError):
+    except (
+        asyncio.CancelledError,
+        AIOperationDeadlineExceeded,
+        PromptSizeError,
+        DatabaseBusyError,
+    ):
         await _finish_cancelled_processing(resume["resume_id"], processing_token)
         raise
 
@@ -2066,7 +2081,12 @@ async def retry_processing(resume_id: str) -> ResumeUploadResponse:
                 processing_status="ready",
                 is_master=resume.get("is_master", False),
             )
-    except (asyncio.CancelledError, AIOperationDeadlineExceeded, PromptSizeError):
+    except (
+        asyncio.CancelledError,
+        AIOperationDeadlineExceeded,
+        PromptSizeError,
+        DatabaseBusyError,
+    ):
         await _finish_cancelled_processing(resume_id, processing_token)
         raise
 

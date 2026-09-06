@@ -377,3 +377,23 @@ export function readResumeWizardCompletion(): string | null {
     return null;
   }
 }
+
+/** Retire this acknowledged resume without removing a newer draft or receipt. */
+export function clearResumeWizardCompletion(resumeId: string): boolean {
+  try {
+    const value: unknown = JSON.parse(
+      localStorage.getItem(RESUME_WIZARD_DRAFT_STORAGE_KEY) ?? 'null'
+    );
+    if (
+      isRecord(value) &&
+      value.schemaVersion === RESUME_WIZARD_DRAFT_SCHEMA_VERSION &&
+      !('state' in value) &&
+      value.completedResumeId === resumeId
+    ) {
+      localStorage.removeItem(RESUME_WIZARD_DRAFT_STORAGE_KEY);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}

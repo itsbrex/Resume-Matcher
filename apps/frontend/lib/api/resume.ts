@@ -5,6 +5,7 @@ import type {
 import type { ResumeData } from '@/components/dashboard/resume-component';
 import { type TemplateSettings } from '@/lib/types/template-settings';
 import { type Locale } from '@/i18n/config';
+import { clearResumeWizardCompletion } from '@/lib/utils/resume-wizard-storage';
 import { API_BASE, DEFAULT_TIMEOUT_MS, apiPost, apiPatch, apiDelete, apiFetch } from './client';
 
 // Matches backend schemas/models.py ResumeData
@@ -280,6 +281,7 @@ export async function deleteResume(resumeId: string): Promise<void> {
     const text = await res.text().catch(() => '');
     throw new Error(`Failed to delete resume (status ${res.status}): ${text}`);
   }
+  clearResumeWizardCompletion(resumeId);
 }
 
 /** Updates the cover letter for a resume */

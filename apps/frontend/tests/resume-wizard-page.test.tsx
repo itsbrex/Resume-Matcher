@@ -502,6 +502,31 @@ describe('ResumeWizardPage', () => {
     );
     expect(push).toHaveBeenCalledWith('/dashboard');
   });
+  it('retires the recovery receipt after the initial builder navigation succeeds', async () => {
+    localStorage.setItem(
+      'resume_wizard_draft',
+      JSON.stringify(makeState({ step: 'review', resume_data: { personalInfo: { name: 'Ada' } } }))
+    );
+    mockedFinalize.mockResolvedValue({
+      message: 'Created',
+      request_id: 'ack',
+      resume_id: 'saved-resume',
+      processing_status: 'ready',
+      is_master: true,
+    });
+    vi.spyOn(Storage.prototype, 'removeItem').mockImplementationOnce(() => {
+      throw new Error('Transient remove failure');
+    });
+    push.mockImplementation(() => undefined);
+    const view = render(<ResumeWizardPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'resumeWizard.actions.create' }));
+    await waitFor(() => expect(push).toHaveBeenCalledWith('/builder?id=saved-resume'));
+    view.unmount();
+    render(<ResumeWizardPage />);
+    expect(await screen.findByRole('textbox')).toBeVisible();
+    expect(mockedFinalize).toHaveBeenCalledTimes(1);
+  });
+
   it('reopens the acknowledged resume after reload when draft removal fails', async () => {
     localStorage.setItem(
       'resume_wizard_draft',

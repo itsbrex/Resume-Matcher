@@ -7,6 +7,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useStatusCache } from '@/lib/context/status-cache';
 import { useTranslations } from '@/lib/i18n';
 import {
+  clearResumeWizardCompletion,
   clearResumeWizardDraft,
   readResumeWizardCompletion,
   writeResumeWizardCompletion,
@@ -164,6 +165,7 @@ export function ResumeWizardPage() {
     }
     try {
       router.push(`/builder?id=${resumeId}`);
+      clearResumeWizardCompletion(resumeId);
     } catch {
       setErrorKey('resumeWizard.errors.createdNavigationFailed');
     }
@@ -174,6 +176,7 @@ export function ResumeWizardPage() {
     if (!createdResumeId) return;
     try {
       router.push(`/builder?id=${createdResumeId}`);
+      clearResumeWizardCompletion(createdResumeId);
     } catch {
       setErrorKey('resumeWizard.errors.createdNavigationFailed');
     }

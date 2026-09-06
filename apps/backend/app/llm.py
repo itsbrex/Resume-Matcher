@@ -1359,11 +1359,11 @@ def _strip_thinking_tags(content: str) -> str:
 
 
 def _object_starts_inside_array(content: str, object_start: int) -> bool:
-    """Reject enclosed objects even when their outer array is truncated."""
-    array_depth = 0
+    """Return whether the prefix is valid JSON array grammar around the object."""
+    array_starts: list[int] = []
     in_string = False
     escaped = False
-    for char in content[:object_start]:
+    for index, char in enumerate(content[:object_start]):
         if in_string:
             if escaped:
                 escaped = False
@@ -1374,10 +1374,26 @@ def _object_starts_inside_array(content: str, object_start: int) -> bool:
         elif char == '"':
             in_string = True
         elif char == "[":
-            array_depth += 1
-        elif char == "]":
-            array_depth = max(0, array_depth - 1)
-    return array_depth > 0
+            array_starts.append(index)
+        elif char == "]" and array_starts:
+            array_starts.pop()
+    if not array_starts:
+        return False
+
+    candidate = (
+        content[array_starts[0] : object_start]
+        + "{}"
+        + "]" * len(array_starts)
+    )
+    try:
+        value, end = json.JSONDecoder().raw_decode(candidate)
+    except RecursionError:
+        # Treat prefixes too deeply nested for the decoder as unreadable arrays
+        # instead of salvaging an object from inside them.
+        return True
+    except json.JSONDecodeError:
+        return False
+    return isinstance(value, list) and not candidate[end:].strip()
 
 
 def _extract_json(content: str, _depth: int = 0) -> str:

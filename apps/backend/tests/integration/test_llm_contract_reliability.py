@@ -184,8 +184,18 @@ def test_enrichment_uses_valid_legacy_field_when_canonical_field_is_empty() -> N
         '```json\n[{"changes": []}]\n```',
         'Here is the result: [{"changes": []}',
         'Here is the result: [null, {"changes": []}',
+        "Here is the result: "
+        + "[" * 10_000
+        + '{"changes": []}'
+        + "]" * 10_000,
     ],
-    ids=["prose-prefixed", "fenced", "unclosed-array", "unclosed-array-with-scalar"],
+    ids=[
+        "prose-prefixed",
+        "fenced",
+        "unclosed-array",
+        "unclosed-array-with-scalar",
+        "deeply-nested-array",
+    ],
 )
 async def test_top_level_array_gets_corrective_retry(
     monkeypatch: pytest.MonkeyPatch,
@@ -205,15 +215,21 @@ async def test_top_level_array_gets_corrective_retry(
     assert "Output ONLY a valid JSON object" in retry_messages[-1]["content"]
 
 
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "Notes [schema v2] and citation [1] follow.\n",
+        "Notes [draft citation missing its closing delimiter\n",
+    ],
+    ids=["closed-brackets", "unmatched-non-json-bracket"],
+)
 async def test_bracketed_prose_before_object_is_salvaged_without_retry(
     monkeypatch: pytest.MonkeyPatch,
+    prefix: str,
 ) -> None:
     router = AsyncMock()
     response = _response({"changes": []})
-    response.choices[0].message.content = (
-        "Notes [schema v2] and citation [1] follow.\n"
-        '{"changes": []}'
-    )
+    response.choices[0].message.content = prefix + '{"changes": []}'
     router.acompletion.return_value = response
     monkeypatch.setattr(llm, "get_router", lambda _config=None: (router, CONFIG))
     monkeypatch.setattr(llm, "_supports_json_mode", lambda _model: False)

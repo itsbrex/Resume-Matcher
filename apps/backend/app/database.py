@@ -778,6 +778,33 @@ class Database:
 
     # -- Improvement operations ---------------------------------------------
 
+    async def create_tailored_resume(
+        self,
+        *,
+        request_id: str,
+        original_resume_id: str,
+        job_id: str,
+        resume_fields: dict[str, Any],
+        improvements: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Commit a direct tailoring result and its required relation together."""
+        row = self._new_resume(**resume_fields)
+        async with self._write_session() as session:
+            session.add(row)
+            await session.flush()
+            session.add(
+                Improvement(
+                    request_id=request_id,
+                    original_resume_id=original_resume_id,
+                    tailored_resume_id=row.resume_id,
+                    job_id=job_id,
+                    improvements=copy.deepcopy(improvements),
+                    created_at=_now(),
+                )
+            )
+            await session.commit()
+        return self._resume_to_dict(row)
+
     async def create_improvement(
         self,
         original_resume_id: str,

@@ -1713,27 +1713,25 @@ async def improve_resume_endpoint(
         )
         response_warnings.extend(aux_warnings)
 
-        # Store the tailored resume with cover letter, outreach message, and title
-        tailored_resume = await db.create_resume(
-            content=improved_text,
-            content_type="json",
-            filename=f"tailored_{resume.get('filename', 'resume')}",
-            is_master=False,
-            parent_id=request.resume_id,
-            processed_data=improved_data,
-            processing_status="ready",
-            cover_letter=cover_letter,
-            outreach_message=outreach_message,
-            interview_prep=_serialize_interview_prep(interview_prep),
-            title=title,
-        )
-
-        # Store improvement record
+        # Cancellation must leave both required records committed or neither.
         request_id = str(uuid4())
-        await db.create_improvement(
+        tailored_resume = await db.create_tailored_resume(
+            request_id=request_id,
             original_resume_id=request.resume_id,
-            tailored_resume_id=tailored_resume["resume_id"],
             job_id=request.job_id,
+            resume_fields={
+                "content": improved_text,
+                "content_type": "json",
+                "filename": f"tailored_{resume.get('filename', 'resume')}",
+                "is_master": False,
+                "parent_id": request.resume_id,
+                "processed_data": improved_data,
+                "processing_status": "ready",
+                "cover_letter": cover_letter,
+                "outreach_message": outreach_message,
+                "interview_prep": _serialize_interview_prep(interview_prep),
+                "title": title,
+            },
             improvements=improvements,
         )
 

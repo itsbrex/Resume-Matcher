@@ -67,10 +67,22 @@ function resume(name: string, resumeId = 'resume-a'): Awaited<ReturnType<typeof 
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((complete) => {
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((complete, fail) => {
     resolve = complete;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
+}
+
+function attemptClose(method: 'close button' | 'escape' | 'backdrop'): void {
+  if (method === 'close button') {
+    fireEvent.click(screen.getByRole('button', { name: 'common.close' }));
+  } else if (method === 'escape') {
+    fireEvent(screen.getByRole('dialog'), new Event('cancel', { cancelable: true }));
+  } else {
+    fireEvent.click(screen.getByRole('dialog'));
+  }
 }
 
 async function reachSavedCompletion(expectedSaves = 1): Promise<void> {
@@ -210,27 +222,102 @@ describe('resume viewer enrichment completion', () => {
     expect(mockedApplyEnhancements).toHaveBeenCalledTimes(1);
   });
 
-  it('ignores a refresh completed after closing and reopening enrichment', async () => {
-    const staleRefresh = deferred<Awaited<ReturnType<typeof fetchResume>>>();
-    mockedFetchResume
-      .mockResolvedValueOnce(resume('Before'))
-      .mockReturnValueOnce(staleRefresh.promise);
+  it.each(['close button', 'escape', 'backdrop'] as const)(
+    'keeps the acknowledged refresh result after a pending %s close attempt',
+    async (method) => {
+      const pending = deferred<Awaited<ReturnType<typeof fetchResume>>>();
+      mockedFetchResume
+        .mockResolvedValueOnce(resume('Before'))
+        .mockReturnValueOnce(pending.promise);
+      render(<ResumeViewerPage />);
+      await reachSavedCompletion();
+      fireEvent.click(screen.getByRole('button', { name: 'enrichment.complete.doneButton' }));
+      const refreshButton = screen.getByRole('button', { name: 'enrichment.complete.refreshing' });
+      expect(refreshButton).toBeDisabled();
+      fireEvent.click(refreshButton);
+      attemptClose(method);
+      await act(async () => pending.resolve(resume('After')));
+
+      expect(screen.getByTestId('resume-name')).toHaveTextContent('After');
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(mockedFetchResume).toHaveBeenCalledTimes(2);
+      expect(mockedApplyEnhancements).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it.each(['close button', 'escape', 'backdrop'] as const)(
+    'keeps refresh-only recovery after a pending %s close attempt and failed refresh',
+    async (method) => {
+      const pending = deferred<Awaited<ReturnType<typeof fetchResume>>>();
+      mockedFetchResume
+        .mockResolvedValueOnce(resume('Before'))
+        .mockReturnValueOnce(pending.promise)
+        .mockResolvedValueOnce(resume('After retry'));
+      render(<ResumeViewerPage />);
+      await reachSavedCompletion();
+      fireEvent.click(screen.getByRole('button', { name: 'enrichment.complete.doneButton' }));
+      attemptClose(method);
+      await act(async () => pending.reject(new Error('Refresh offline')));
+
+      expect(screen.getByRole('alert')).toHaveTextContent('enrichment.complete.refreshFailed');
+      expect(screen.getByTestId('resume-name')).toHaveTextContent('Before');
+      fireEvent.click(screen.getByRole('button', { name: 'enrichment.complete.retryRefresh' }));
+      await waitFor(() =>
+        expect(screen.getByTestId('resume-name')).toHaveTextContent('After retry')
+      );
+      expect(mockedApplyEnhancements).toHaveBeenCalledTimes(1);
+      expect(mockedFetchResume).toHaveBeenCalledTimes(3);
+    }
+  );
+
+  it.each(['close button', 'escape', 'backdrop'] as const)(
+    'allows the %s to close again after refresh fails',
+    async (method) => {
+      mockedFetchResume
+        .mockResolvedValueOnce(resume('Before'))
+        .mockRejectedValueOnce(new Error('Refresh offline'));
+      render(<ResumeViewerPage />);
+      await reachSavedCompletion();
+      fireEvent.click(screen.getByRole('button', { name: 'enrichment.complete.doneButton' }));
+      await screen.findByRole('alert');
+      attemptClose(method);
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(mockedApplyEnhancements).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('disables the header close button and prevents native ESC cancellation during refresh', async () => {
+    const pending = deferred<Awaited<ReturnType<typeof fetchResume>>>();
+    mockedFetchResume.mockResolvedValueOnce(resume('Before')).mockReturnValueOnce(pending.promise);
     render(<ResumeViewerPage />);
     await reachSavedCompletion();
     fireEvent.click(screen.getByRole('button', { name: 'enrichment.complete.doneButton' }));
-    const refreshButton = screen.getByRole('button', { name: 'enrichment.complete.refreshing' });
-    expect(refreshButton).toBeDisabled();
-    fireEvent.click(refreshButton);
-    expect(mockedFetchResume).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('button', { name: 'common.close' })).toBeDisabled();
+    const cancel = new Event('cancel', { cancelable: true });
+    fireEvent(screen.getByRole('dialog'), cancel);
+    expect(cancel.defaultPrevented).toBe(true);
+    expect(screen.getByRole('dialog')).toBeVisible();
+    await act(async () => pending.resolve(resume('After')));
+    expect(screen.getByTestId('resume-name')).toHaveTextContent('After');
+  });
 
-    fireEvent.click(screen.getByRole('button', { name: 'common.close' }));
-    fireEvent.click(screen.getByRole('button', { name: 'resumeViewer.enhanceResume' }));
-    expect(await screen.findByRole('textbox')).toBeVisible();
-    await act(async () => staleRefresh.resolve(resume('Stale')));
-
-    expect(screen.getByTestId('resume-name')).toHaveTextContent('Before');
-    expect(screen.getByRole('textbox')).toBeVisible();
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  it('discards an acknowledged refresh after navigation unmounts its viewer', async () => {
+    const pending = deferred<Awaited<ReturnType<typeof fetchResume>>>();
+    mockedFetchResume
+      .mockResolvedValueOnce(resume('A before'))
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce(resume('B current', 'resume-b'));
+    const view = render(<ResumeViewerPage />);
+    await reachSavedCompletion();
+    fireEvent.click(screen.getByRole('button', { name: 'enrichment.complete.doneButton' }));
+    view.unmount();
+    route.resumeId = 'resume-b';
+    localStorage.setItem('master_resume_id', 'resume-b');
+    render(<ResumeViewerPage />);
+    await waitFor(() => expect(screen.getByTestId('resume-name')).toHaveTextContent('B current'));
+    await act(async () => pending.resolve(resume('A stale')));
+    expect(screen.getByTestId('resume-name')).toHaveTextContent('B current');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(mockedApplyEnhancements).toHaveBeenCalledTimes(1);
   });
 });

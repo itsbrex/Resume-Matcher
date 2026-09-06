@@ -81,6 +81,8 @@ export function EnrichmentModal({ resumeId, isOpen, onClose, onComplete }: Enric
 
   // Handle close
   const handleClose = () => {
+    // Keep the acknowledged apply observable until its refresh settles.
+    if (isRefreshing) return;
     invalidate();
     setRefreshFailed(false);
     setIsRefreshing(false);
@@ -118,7 +120,7 @@ export function EnrichmentModal({ resumeId, isOpen, onClose, onComplete }: Enric
   // Handle ESC key
   const handleCancel = (e: React.SyntheticEvent<HTMLDialogElement, Event>) => {
     // Prevent closing during loading states
-    if (['analyzing', 'generating', 'applying'].includes(state.step)) {
+    if (isRefreshing || ['analyzing', 'generating', 'applying'].includes(state.step)) {
       e.preventDefault();
     } else {
       handleClose();
@@ -155,7 +157,11 @@ export function EnrichmentModal({ resumeId, isOpen, onClose, onComplete }: Enric
             </div>
             {/* Only show close button in non-loading states */}
             {!['analyzing', 'generating', 'applying'].includes(state.step) && (
-              <button onClick={handleClose} className="p-1 hover:bg-paper-tint transition-colors">
+              <button
+                onClick={handleClose}
+                disabled={isRefreshing}
+                className="p-1 hover:bg-paper-tint transition-colors disabled:opacity-50"
+              >
                 <XIcon className="w-5 h-5" />
                 <span className="sr-only">{t('common.close')}</span>
               </button>

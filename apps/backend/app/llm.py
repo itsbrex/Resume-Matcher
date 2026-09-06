@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import threading
+from collections.abc import Callable
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
@@ -12,6 +13,8 @@ from litellm import Router
 from litellm.router import RetryPolicy
 from pydantic import BaseModel
 
+from app.ai_limits import validate_prompt_size
+from app.ai_budget import remaining_timeout
 from app.config import load_config_file, save_config_file, settings
 
 LITELLM_LOGGER_NAMES = ("LiteLLM", "LiteLLM Router", "LiteLLM Proxy")
@@ -736,6 +739,33 @@ _router_config_key: str = ""
 _router_lock = threading.Lock()
 
 
+class _PolicyRouter(Router):
+    """Apply the complete app retry policy with the installed LiteLLM Router.
+
+    LiteLLM 1.86.2's retry-policy dispatcher does not classify
+    ``InternalServerError`` even though ``RetryPolicy`` exposes the matching
+    field. Its ``None`` result falls back to the Router-wide retry count.
+    Keep that compatibility correction confined to the omitted exception.
+    """
+
+    async def make_call(
+        self,
+        original_function: Any,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        try:
+            return await super().make_call(original_function, *args, **kwargs)
+        except litellm.InternalServerError as error:
+            # Verified against pinned LiteLLM 1.86.2: the outer
+            # async_function_with_retries awaits self.make_call(), then reads
+            # e.num_retries in its except block before consulting retry policy.
+            # Base make_call performs one provider invocation, not the retry
+            # loop, so this override is observed before another attempt.
+            error.num_retries = 2
+            raise
+
+
 def _config_fingerprint(config: LLMConfig) -> str:
     """Generate a fingerprint to detect config changes.
 
@@ -763,7 +793,7 @@ def _build_router(config: LLMConfig) -> Router:
     if api_version:
         litellm_params["api_version"] = api_version
 
-    return Router(
+    return _PolicyRouter(
         model_list=[
             {
                 "model_name": "primary",
@@ -944,6 +974,7 @@ async def complete(
 
     Transport retries (429, 500, timeout) are handled by the Router.
     """
+    validate_prompt_size(prompt + (system_prompt or ""))
     router, config = get_router(config)
     model_name = get_model_name(config)
 
@@ -957,9 +988,13 @@ async def complete(
             "model": "primary",
             "messages": messages,
             "max_tokens": max_tokens,
-            "timeout": _calculate_timeout("completion", max_tokens, config.provider),
+            "timeout": remaining_timeout(
+                _calculate_timeout("completion", max_tokens, config.provider)
+            ),
         }
-        if _supports_temperature(model_name, temperature):
+        if _supports_temperature(
+            model_name, temperature, reasoning_effort=config.reasoning_effort
+        ):
             kwargs["temperature"] = temperature
         if config.reasoning_effort:
             kwargs["reasoning_effort"] = config.reasoning_effort
@@ -972,9 +1007,12 @@ async def complete(
         # Strip thinking tags from reasoning models (deepseek-r1, qwq, etc.)
         if "<think>" in content:
             content = _strip_thinking_tags(content)
-            if not content:
-                raise ValueError("Response contained only thinking content, no output")
+        content = content.strip()
+        if not content:
+            raise ValueError("Response contained no visible output")
         return content
+    except TimeoutError:
+        raise
     except Exception as e:
         # Log the actual error server-side for debugging
         logging.error(f"LLM completion failed: {e}", extra={
@@ -1118,16 +1156,9 @@ def _appears_truncated(data: dict, schema_type: str = "resume") -> bool:
         return False
 
     if schema_type == "resume":
-        # Full resume structure: check for empty required arrays
-        suspicious_empty_arrays = ["workExperience", "education", "skills"]
-        for key in suspicious_empty_arrays:
-            if key in data and data[key] == []:
-                # Log warning - these are rarely empty in real resumes
-                logging.warning(
-                    "Possible truncation detected: '%s' is empty",
-                    key,
-                )
-                return True
+        # A resume can legitimately omit or empty every optional section.
+        # Callers that need stronger guarantees provide a response validator
+        # based on their source contract.
         return False
 
     if schema_type == "enrichment":
@@ -1164,22 +1195,29 @@ def _appears_truncated(data: dict, schema_type: str = "resume") -> bool:
     return False
 
 
-def _supports_temperature(model_name: str, temperature: float | None = None) -> bool:
+def _supports_temperature(
+    model_name: str,
+    temperature: float | None = None,
+    reasoning_effort: str | None = None,
+) -> bool:
     """Check if the model supports the given temperature value.
 
     Uses LiteLLM model registry for capability detection, with
-    provider-specific fallbacks for known restrictions:
+    narrowly scoped fallbacks for known restrictions:
       - Anthropic claude-opus-4.*: temperature is deprecated
       - Moonshot kimi-k2.6: only temperature=1 allowed
-      - gpt-5.*: only temperature=1 allowed, on OpenAI and Azure alike
+      - Reasoning GPT-5 models: non-default values require both registry
+        support for no-reasoning mode and an omitted reasoning effort
 
     Queries LiteLLM's model info for every provider so that capability is
-    always determined from the registry rather than a hardcoded list.
+    determined from the registry rather than a provider-wide exemption.
 
     Args:
         model_name: LiteLLM-formatted model name (from get_model_name).
         temperature: The temperature value to check. If None, returns True
             (caller isn't setting a specific value).
+        reasoning_effort: Configured reasoning mode. None means the request
+            omits the parameter and uses a model's no-reasoning default.
 
     Returns:
         True if the model supports the given temperature, False otherwise.
@@ -1214,25 +1252,70 @@ def _supports_temperature(model_name: str, temperature: float | None = None) -> 
     if "kimi-k2.6" in model_name.lower() and temperature != 1.0:
         return False
 
-    # gpt-5 only allows temperature=1, on OpenAI and Azure alike.
-    if "gpt-5" in model_name.lower() and temperature != 1.0:
+    # GPT-5 reasoning models allow flexible sampling only when the model map
+    # advertises a no-reasoning mode and the application omits reasoning_effort.
+    # LiteLLM routes the exact gpt-5-chat* family through its regular chat
+    # transform (versioned names such as gpt-5.1-chat remain reasoning models),
+    # so preserve sampling for that family even though its current registry
+    # metadata says supports_reasoning=True. Provider prefixes are ignored so
+    # OpenAI, Azure, and registered compatible aliases receive the same
+    # capability decision. Unknown compatible aliases returned False above.
+    normalized_model = model_name.rsplit("/", 1)[-1].lower()
+    is_reasoning_gpt5 = (
+        normalized_model.startswith("gpt-5")
+        and not normalized_model.startswith("gpt-5-chat")
+    )
+    reasoning_capability = info.get("supports_reasoning")
+    if (
+        is_reasoning_gpt5
+        and temperature != 1.0
+        and not isinstance(reasoning_capability, bool)
+    ):
+        logging.warning(
+            "Missing or invalid reasoning capability for %s; omitting temperature",
+            model_name,
+        )
         return False
+    if (
+        is_reasoning_gpt5
+        and reasoning_capability is True
+        and temperature != 1.0
+    ):
+        if not isinstance(info.get("supports_none_reasoning_effort"), bool):
+            logging.warning(
+                "Missing or invalid no-reasoning capability for %s; omitting temperature",
+                model_name,
+            )
+        supports_no_reasoning = (
+            info.get("supports_none_reasoning_effort") is True
+        )
+        if not supports_no_reasoning or reasoning_effort is not None:
+            return False
 
     return True
 
 
-def _get_retry_temperature(model_name: str, attempt: int, base_temp: float = 0.1) -> float | None:
+def _get_retry_temperature(
+    model_name: str,
+    attempt: int,
+    base_temp: float = 0.1,
+    reasoning_effort: str | None = None,
+) -> float | None:
     """LLM-002: Get temperature for retry attempt.
 
     Returns None if the model does not accept the requested temperature.
     Returns 1.0 for kimi-k2.6, which requires an explicit temperature=1.
-    Otherwise returns increasing temperatures for retry variation.
+    Otherwise returns increasing temperatures for retry variation. GPT-5
+    capability checks include the configured reasoning mode; None means the
+    request omits reasoning_effort rather than sending a literal "none".
     """
     # Moonshot kimi-k2.6 only allows temperature=1.
     if "kimi-k2.6" in model_name.lower():
         return 1.0
 
-    if not _supports_temperature(model_name, base_temp):
+    if not _supports_temperature(
+        model_name, base_temp, reasoning_effort=reasoning_effort
+    ):
         return None
 
     temperatures = [base_temp, 0.3, 0.5, 0.7]
@@ -1284,6 +1367,46 @@ def _strip_thinking_tags(content: str) -> str:
     return stripped.strip()
 
 
+def _object_starts_inside_array(content: str, object_start: int) -> bool:
+    """Return whether the prefix is valid JSON array grammar around the object."""
+    array_starts: list[int] = []
+    in_string = False
+    escaped = False
+    for index, char in enumerate(content[:object_start]):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char == "[":
+            array_starts.append(index)
+        elif char == "]" and array_starts:
+            array_starts.pop()
+    if not array_starts:
+        return False
+
+    candidate = (
+        content[array_starts[0] : object_start]
+        + "{}"
+        + "]" * len(array_starts)
+    )
+    try:
+        value, end = json.JSONDecoder().raw_decode(candidate)
+    except RecursionError:
+        # Treat prefixes too deeply nested for the decoder as unreadable arrays
+        # instead of salvaging an object from inside them.
+        return True
+    except json.JSONDecodeError:
+        # An object-like fragment inside an unclosed array string is not a
+        # trustworthy recovery point. Plain bracketed prose remains salvageable.
+        return in_string
+    return isinstance(value, list) and not candidate[end:].strip()
+
+
 def _extract_json(content: str, _depth: int = 0) -> str:
     """Extract JSON from LLM response, handling various formats.
 
@@ -1317,6 +1440,9 @@ def _extract_json(content: str, _depth: int = 0) -> str:
                 content = content[4:]
 
     content = content.strip()
+
+    if content.startswith("["):
+        raise ValueError("Expected a JSON object, received a top-level array")
 
     # If content starts with {, find the matching }
     if content.startswith("{"):
@@ -1357,6 +1483,10 @@ def _extract_json(content: str, _depth: int = 0) -> str:
 
     # Try to find JSON object in the content (only if not already at start)
     start_idx = content.find("{")
+    if start_idx < 0 and "[" in content:
+        raise ValueError("Expected a JSON object, received a top-level array")
+    if start_idx >= 0 and _object_starts_inside_array(content, start_idx):
+        raise ValueError("Expected a JSON object, received a top-level array")
     if start_idx > 0:
         # Only recurse if { is found after position 0 to avoid infinite recursion
         return _extract_json(content[start_idx:], _depth + 1)
@@ -1380,6 +1510,7 @@ async def complete_json(
     max_tokens: int = 4096,
     retries: int = 2,
     schema_type: str = "resume",
+    response_validator: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Make a completion request expecting JSON response.
 
@@ -1391,7 +1522,10 @@ async def complete_json(
         schema_type: Expected schema — "resume", "enrichment", "diff",
             "keywords", or "interview_prep". Passed to _appears_truncated for
             context-aware truncation detection and used to tailor retry hints.
+        response_validator: Optional synchronous schema/source validator. A
+            ``ValueError`` rejects the content inside this retry budget.
     """
+    validate_prompt_size(prompt + (system_prompt or ""))
     router, config = get_router(config)
     model_name = get_model_name(config)
 
@@ -1416,10 +1550,14 @@ async def complete_json(
                 "model": "primary",
                 "messages": messages,
                 "max_tokens": max_tokens,
-                "timeout": _calculate_timeout("json", max_tokens, config.provider),
+                "timeout": remaining_timeout(
+                    _calculate_timeout("json", max_tokens, config.provider)
+                ),
             }
             # LLM-002: Increase temperature on retry for variation
-            retry_temp = _get_retry_temperature(model_name, attempt)
+            retry_temp = _get_retry_temperature(
+                model_name, attempt, reasoning_effort=config.reasoning_effort
+            )
             if retry_temp is not None:
                 kwargs["temperature"] = retry_temp
             reasoning_effort = config.reasoning_effort
@@ -1478,8 +1616,15 @@ async def complete_json(
             json_str = _extract_json(content)
             result = json.loads(json_str)
 
+            if not isinstance(result, dict):
+                raise ValueError("Expected a JSON object")
+            if response_validator is not None:
+                result = response_validator(result)
+                if not isinstance(result, dict):
+                    raise ValueError("Response validator must return a JSON object")
+
             # LLM-001: Check if parsed result appears truncated
-            if isinstance(result, dict) and _appears_truncated(result, schema_type):
+            if _appears_truncated(result, schema_type):
                 if attempt < retries:
                     logging.warning(
                         "Parsed JSON appears truncated (attempt %d/%d), retrying",
@@ -1534,6 +1679,10 @@ async def complete_json(
             # Content quality — empty response, JSON extraction failure
             logging.warning(f"Content extraction failed (attempt {attempt + 1}): {e}")
             if attempt < retries:
+                messages[-1]["content"] = (
+                    prompt
+                    + "\n\nIMPORTANT: Output ONLY a valid JSON object that satisfies every requested field and type."
+                )
                 continue
             raise
 

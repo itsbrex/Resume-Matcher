@@ -152,7 +152,7 @@ async def test_normal_browser_close_and_driver_stop_disconnects() -> None:
 
 
 @pytest.mark.parametrize("release_during_shutdown", [False, True])
-async def test_failed_driver_stop_retains_capacity_and_shutdown_waits(
+async def test_pending_driver_stop_retains_capacity_and_shutdown_waits(
     monkeypatch: pytest.MonkeyPatch,
     release_during_shutdown: bool,
 ) -> None:
@@ -160,16 +160,11 @@ async def test_failed_driver_stop_retains_capacity_and_shutdown_waits(
     driver = pdf._playwright
     assert driver is not None
     original_stop = driver.stop
-    failed = asyncio.Event()
+    stopping = asyncio.Event()
     release_stop = asyncio.Event()
-    stop_calls = 0
 
     async def stop() -> None:
-        nonlocal stop_calls
-        stop_calls += 1
-        if stop_calls == 1:
-            failed.set()
-            raise PlaywrightError("synthetic temporary driver stop failure")
+        stopping.set()
         await release_stop.wait()
         await original_stop()
 
@@ -179,9 +174,9 @@ async def test_failed_driver_stop_retains_capacity_and_shutdown_waits(
     assert owner is not None
     shutdown: asyncio.Task[None] | None = None
     try:
-        await asyncio.wait_for(failed.wait(), 2)
+        await asyncio.wait_for(stopping.wait(), 2)
         await asyncio.sleep(0)
-        assert pdf._active_renders == 1, "Driver teardown failure released capacity"
+        assert pdf._active_renders == 1, "Pending driver teardown released capacity"
         with pytest.raises(pdf.PDFRenderOverloadedError):
             await pdf.render_resume_pdf(RESUME_PRINT_DATA_URL)
         shutdown = asyncio.create_task(pdf.close_pdf_renderer())
@@ -203,3 +198,55 @@ async def test_failed_driver_stop_retains_capacity_and_shutdown_waits(
         await asyncio.gather(owner, return_exceptions=True)
         if shutdown is not None:
             await asyncio.gather(shutdown, return_exceptions=True)
+
+
+async def test_failed_one_shot_driver_stop_cannot_acknowledge_a_live_browser(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Drive the real public stop wrapper through an internal transport failure."""
+    browser = await _warm_browser()
+    driver = pdf._playwright
+    assert driver is not None
+    context = driver.stop.__self__
+    connection = context._connection
+    original_stop_async = connection.stop_async
+    stop_failed = asyncio.Event()
+
+    async def close() -> None:
+        raise PlaywrightError("synthetic browser close failure")
+
+    async def stop_connection() -> None:
+        stop_failed.set()
+        raise PlaywrightError("synthetic connection shutdown failure")
+
+    monkeypatch.setattr(browser, "close", close)
+    monkeypatch.setattr(connection, "stop_async", stop_connection)
+    owner = pdf._retire_shared_browser(browser)
+    assert owner is not None
+    try:
+        await asyncio.wait_for(stop_failed.wait(), 2)
+        await asyncio.sleep(0.15)
+        assert browser.is_connected()
+        # The first public stop call marks the context exited before failing;
+        # calling it again is a no-op, not proof that the live driver stopped.
+        assert pdf._active_renders == 1
+        assert pdf._quarantined_browsers.get(browser) is driver
+        assert owner.done() and not owner.cancelled()
+        with pytest.raises(pdf.PDFRenderError, match="restart"):
+            await owner
+        await pdf.close_pdf_renderer()
+        assert "quarantined browser generations" in caplog.text
+        assert pdf._active_renders == 1
+    finally:
+        # Direct invocation is only a test cleanup for the owned real driver,
+        # deliberately bypassing its now-disabled public stop wrapper.
+        await original_stop_async()
+        if not owner.done():
+            owner.cancel()
+        await asyncio.gather(owner, return_exceptions=True)
+        # Restore test state only after independently stopping this test's
+        # driver. Production intentionally keeps its quarantined reservation.
+        if browser in pdf._quarantined_browsers:
+            pdf._quarantined_browsers.pop(browser)
+            pdf._release_render_slot()

@@ -50,9 +50,13 @@ without aborting or replaying healthy exports.
 
 A successful stop of the owned Playwright driver is a teardown acknowledgement,
 even if its Browser object retains a stale `is_connected()` flag. If driver
-shutdown fails, cleanup keeps its admission slot and retries. Application shutdown
-waits for tracked cleanup owners within the cleanup reserve and logs any that
-remain pending; it does not cancel them or release their capacity prematurely.
+shutdown fails, cleanup quarantines its browser/driver objects and admission slot
+until application restart. Playwright's stop method is one-shot, so retrying a
+failed stop can return without doing any cleanup; such a return is not accepted
+as proof of teardown. Quarantine logs the failure and completes the cleanup task
+instead of leaving an unsignalled waiter. Application shutdown reports any
+quarantined generations and waits for still-active cleanup owners within the
+cleanup reserve; it does not cancel them or release their capacity prematurely.
 
 ## Query Parameters
 

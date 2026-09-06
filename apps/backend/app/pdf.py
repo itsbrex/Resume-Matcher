@@ -133,6 +133,9 @@ class _BrowserUsers:
 
 
 _browser_users: dict[Browser, _BrowserUsers] = {}
+# A failed one-shot driver stop has no public retry/health acknowledgement.
+# Retain its objects and admission slot until the process is restarted.
+_quarantined_browsers: dict[Browser, Playwright | None] = {}
 
 
 def _acquire_browser_user(browser: Browser) -> _BrowserUsers:
@@ -614,6 +617,12 @@ async def close_pdf_renderer() -> None:
             )
         # Do not cancel pending owners: they retain capacity until the driver
         # or fallback worker has actually stopped.
+    if _quarantined_browsers:
+        logger.error(
+            "PDF shutdown has %d quarantined browser generations; "
+            "capacity remains reserved until application restart",
+            len(_quarantined_browsers),
+        )
 
 
 def _acquire_render_slot() -> None:
@@ -655,41 +664,54 @@ async def _close_retired_browser(
     try:
         if users_drained is not None:
             await users_drained.wait()
-        browser_closed = False
-        driver_stopped = playwright is None
-        cleanup_attempt = 0
-        while not (browser_closed and driver_stopped):
-            if not browser_closed:
-                try:
-                    await browser.close()
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    if cleanup_attempt == 0:
-                        logger.exception("Failed to close retired PDF browser")
-                browser_closed = not _browser_is_connected(browser)
-            if not driver_stopped:
-                assert playwright is not None
-                try:
-                    await playwright.stop()
-                    driver_stopped = True
-                    # Owned Playwright.stop waits for its driver to exit. A
-                    # Browser object can retain a stale connected flag after
-                    # that transport closes, although Chromium was reaped.
-                    browser_closed = True
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    if cleanup_attempt == 0:
-                        logger.exception("Failed to stop retired PDF Playwright instance")
-            if not (browser_closed and driver_stopped):
-                # Keep both admission and background ownership on a real
-                # teardown failure; retry instead of an unsignallable wait.
-                cleanup_attempt += 1
-                await asyncio.sleep(0.1)
+        try:
+            await browser.close()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Failed to close retired PDF browser")
+        teardown_confirmed = not _browser_is_connected(browser)
+        if playwright is not None:
+            teardown_confirmed = False
+            try:
+                await playwright.stop()
+                # Owned Playwright.stop waits for its driver to exit. A
+                # Browser object can retain a stale connected flag after
+                # that transport closes, although Chromium was reaped.
+                teardown_confirmed = True
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Failed to stop retired PDF Playwright instance")
+        if not teardown_confirmed:
+            # Playwright.stop is one-shot: a subsequent call after failure can
+            # be a no-op. Never treat that as proof the driver has terminated.
+            _quarantined_browsers[browser] = playwright
+            if not release_slot:
+                _retain_render_slot_for_cleanup()
+            release_slot = False
+            logger.error(
+                "PDF browser cleanup is quarantined; capacity remains reserved "
+                "until application restart"
+            )
+            raise PDFRenderError(
+                "PDF renderer cleanup failed. Please restart the application."
+            )
     finally:
         if release_slot:
             _release_render_slot()
+
+
+def _retired_browser_finished(owner: asyncio.Task[None]) -> None:
+    """Observe retirement errors; terminal failures retain explicit ownership."""
+    _background_owners.discard(owner)
+    if not owner.cancelled():
+        error = owner.exception()
+        if error is not None:
+            logger.error(
+                "Retired PDF browser teardown failed",
+                exc_info=(type(error), error, error.__traceback__),
+            )
 
 
 def _retire_shared_browser(browser: Browser, *, retain_slot: bool = True) -> asyncio.Task[None] | None:
@@ -713,7 +735,7 @@ def _retire_shared_browser(browser: Browser, *, retain_slot: bool = True) -> asy
         )
     )
     _background_owners.add(owner)
-    owner.add_done_callback(_background_owners.discard)
+    owner.add_done_callback(_retired_browser_finished)
     return owner
 
 

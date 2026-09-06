@@ -205,11 +205,12 @@ def _merge_entries[T: _IdentifiedEntry](
             id_index.setdefault(item.id, position)
         signature_positions.setdefault(key(item), deque()).append(position)
     raw_items = raw_updated if isinstance(raw_updated, list) else []
-    zero_id_full_echo = (
+    unidentified_full_echo = (
         len(existing) > 1
         and len(updated) == len(existing)
         and all(
-            isinstance(raw_item, dict) and raw_item.get("id") == 0
+            isinstance(raw_item, dict)
+            and ("id" not in raw_item or raw_item.get("id") == 0)
             for raw_item in raw_items
         )
         and Counter(key(item) for item in updated)
@@ -219,7 +220,7 @@ def _merge_entries[T: _IdentifiedEntry](
         raw_item = raw_items[item_index] if item_index < len(raw_items) else None
         has_explicit_id = isinstance(raw_item, dict) and "id" in raw_item
         position = id_index.pop(item.id, None) if item.id > 0 else None
-        if zero_id_full_echo:
+        if unidentified_full_echo:
             position = signature_positions[key(item)][0]
         elif position is None and item.id <= 0 and not has_explicit_id:
             candidates = signature_positions.get(key(item), deque())

@@ -1,6 +1,7 @@
 """Application configuration using pydantic-settings."""
 
 import json
+import logging
 import os
 import stat
 import tempfile
@@ -13,6 +14,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 ALLOWED_LOG_LEVELS = ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG")
+logger = logging.getLogger(__name__)
 _CONFIG_WRITE_LOCK = threading.Lock()
 
 
@@ -47,7 +49,9 @@ def _write_config_json(config: dict[str, Any]) -> None:
     snapshots, so concurrent in-process updates resolve in lock-acquisition
     order. Cross-process writers still install only complete snapshots because
     replacement is atomic. In both cases the last completed replacement wins;
-    this primitive does not merge fields.
+    this primitive does not merge fields. Directory durability errors after
+    replacement are logged: the snapshot is already installed, so callers must
+    still acknowledge the save and invalidate cached reads.
     """
     serialized = json.dumps(config, indent=2)
     with _CONFIG_WRITE_LOCK:
@@ -74,13 +78,21 @@ def _write_config_json(config: dict[str, Any]) -> None:
                 os.fsync(temporary_file.fileno())
             os.replace(temporary_path, config_path)
             if os.name != "nt":
-                directory_fd = os.open(
-                    config_path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-                )
                 try:
-                    os.fsync(directory_fd)
-                finally:
-                    os.close(directory_fd)
+                    directory_fd = os.open(
+                        config_path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+                    )
+                    try:
+                        os.fsync(directory_fd)
+                    finally:
+                        os.close(directory_fd)
+                except OSError:
+                    logger.warning(
+                        "Config snapshot replaced at %s, but directory durability "
+                        "could not be confirmed",
+                        config_path,
+                        exc_info=True,
+                    )
         finally:
             if file_descriptor >= 0:
                 os.close(file_descriptor)

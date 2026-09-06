@@ -14,6 +14,20 @@ import { apiFetch } from '@/lib/api/client';
 
 type UploadOperation = { controller: AbortController };
 
+/** A saved upload can remain recoverable even when processing returns an error. */
+export type FileUploadErrorMetadata = {
+  resume_id: string;
+  is_master: boolean;
+};
+
+function parseUploadErrorMetadata(value: unknown): FileUploadErrorMetadata | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  if (!('resume_id' in value) || !('is_master' in value)) return undefined;
+  if (typeof value.resume_id !== 'string' || !value.resume_id.trim()) return undefined;
+  if (typeof value.is_master !== 'boolean') return undefined;
+  return { resume_id: value.resume_id, is_master: value.is_master };
+}
+
 export type FileMetadata = {
   name: string;
   size: number;
@@ -22,6 +36,7 @@ export type FileMetadata = {
   id: string; // Should be unique identifier for the file entry
   uploaded?: boolean; // To track successful upload
   uploadError?: string; // To store upload specific error
+  uploadErrorMetadata?: FileUploadErrorMetadata;
 };
 
 export type FileWithPreview = {
@@ -39,7 +54,11 @@ export type FileUploadOptions = {
   onFilesChange?: (files: FileWithPreview[]) => void;
   onFilesAdded?: (addedFiles: FileWithPreview[]) => void; // Called with newly added valid files
   onUploadSuccess?: (uploadedFile: FileWithPreview, response: Record<string, unknown>) => void;
-  onUploadError?: (file: FileWithPreview, error: string) => void;
+  onUploadError?: (
+    file: FileWithPreview,
+    error: string,
+    metadata?: FileUploadErrorMetadata
+  ) => void;
   uploadUrl?: string; // API endpoint for uploading
 };
 
@@ -297,6 +316,7 @@ export const useFileUpload = (
       formData.append('file', fileToUpload.file); // FastAPI expects 'file' field
 
       const operation = markUploadStarted(fileToUpload.id);
+      let errorMetadata: FileUploadErrorMetadata | undefined;
 
       try {
         const response = await apiFetch(uploadUrl, {
@@ -316,6 +336,14 @@ export const useFileUpload = (
           let errorDetail = `Upload failed for ${fileToUpload.file.name}. Status: ${response.status} ${response.statusText}`;
           try {
             const errorText = await response.text();
+            if (contentType?.includes('application/json')) {
+              try {
+                const errorData: unknown = JSON.parse(errorText);
+                errorMetadata = parseUploadErrorMetadata(errorData);
+              } catch {
+                // Malformed error bodies retain the ordinary upload failure.
+              }
+            }
             errorDetail += ` - Server response: ${errorText.substring(0, 200)}${errorText.length > 200 ? '...' : ''}`;
           } catch (textError: unknown) {
             console.warn('Could not read error response text:', textError);
@@ -384,6 +412,7 @@ export const useFileUpload = (
             url: fileToUpload.preview || '',
             uploaded: false,
             uploadError: errorMessage,
+            ...(errorMetadata ? { uploadErrorMetadata: errorMetadata } : {}),
           },
         };
         setState((prev) => {
@@ -396,7 +425,7 @@ export const useFileUpload = (
 
           return { ...prev, files: updatedFiles, errors: newErrors };
         });
-        callbacksRef.current.onUploadError?.(fileWithError, errorMessage);
+        callbacksRef.current.onUploadError?.(fileWithError, errorMessage, errorMetadata);
       } finally {
         markUploadFinished(fileToUpload.id, operation);
       }

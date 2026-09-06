@@ -6,7 +6,8 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 
-from fastapi import HTTPException, Request, Response
+from fastapi import Request, Response
+from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 
 from app.ai_limits import PromptSizeError
@@ -47,6 +48,16 @@ async def operation_budget(seconds: float) -> AsyncIterator[None]:
         _deadline.reset(token)
 
 
+def operation_error_content(request: Request, detail: str) -> dict[str, str | bool]:
+    """Retain a committed upload identity without asserting its mutable status."""
+    content: dict[str, str | bool] = {"detail": detail}
+    uploaded_resume = getattr(request.state, "uploaded_resume", None)
+    if uploaded_resume is not None:
+        resume_id, is_master = uploaded_resume
+        content.update(resume_id=resume_id, is_master=is_master)
+    return content
+
+
 class AIOperationRoute(APIRoute):
     """Bound POST handlers including validation, database reads and persistence."""
 
@@ -62,16 +73,22 @@ class AIOperationRoute(APIRoute):
                     return await handler(request)
             except PromptSizeError as error:
                 logger.info("AI prompt rejected by input limit: route=%s", self.path)
-                raise HTTPException(status_code=422, detail=str(error)) from error
-            except TimeoutError as error:
+                return JSONResponse(
+                    status_code=422,
+                    content=operation_error_content(request, str(error)),
+                )
+            except TimeoutError:
                 logger.warning(
                     "AI operation timed out: route=%s elapsed=%.3fs",
                     self.path,
                     asyncio.get_running_loop().time() - started,
                 )
-                raise HTTPException(
+                return JSONResponse(
                     status_code=504,
-                    detail="Operation timed out. Please try again with less input or a longer configured request timeout.",
-                ) from error
+                    content=operation_error_content(
+                        request,
+                        "Operation timed out. Please try again with less input or a longer configured request timeout.",
+                    ),
+                )
 
         return bounded_handler

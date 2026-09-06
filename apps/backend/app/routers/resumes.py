@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 from uuid import uuid4
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response
 from pydantic import ValidationError
 
@@ -866,7 +866,9 @@ async def _claim_processing(
 
 
 @router.post("/upload", response_model=ResumeUploadResponse)
-async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
+async def upload_resume(
+    request: Request, file: UploadFile = File(...)
+) -> ResumeUploadResponse:
     """Upload and process a resume file (PDF/DOCX).
 
     Converts the file to Markdown and stores it in the database.
@@ -930,6 +932,11 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
         processing_status="processing",
         original_markdown=markdown_content,
     )
+
+    # Preserve acknowledgement of this request's committed insert even if its
+    # parse fails or the outer operation timer cancels the handler. A status
+    # snapshot would be misleading while retirement/newer work is still pending.
+    request.state.uploaded_resume = (resume["resume_id"], resume.get("is_master", False))
 
     try:
         processing_token = await _claim_processing(resume["resume_id"])

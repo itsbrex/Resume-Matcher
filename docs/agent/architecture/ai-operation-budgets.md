@@ -14,6 +14,8 @@ SQLite contention during completion returns retryable HTTP 503 and starts the sa
 
 If the first claim of a newly inserted upload is busy, retirement targets only that new row while its status is still `processing` and its token is `NULL`. A competing claim or completed save makes the cleanup stale; it cannot reset the new owner. A missing token permits failed retirement only, never publishing a ready result.
 
+After an upload row is created, HTTP 422 prompt-limit, HTTP 504 operation-deadline, and HTTP 503 database-busy responses include its `resume_id` and `is_master` alongside the existing generic `detail`. HTTP 503 retains `Retry-After: 1`. This request-scoped receipt lets the client retrieve or retry that exact row instead of creating another upload. Error responses omit `processing_status`: bounded retirement can still be running, or a newer owner may already have saved it. Failures before row creation and errors from other requests have no upload receipt. Explicit client cancellation still propagates without an HTTP error response.
+
 ## Input policy
 
 Oversized input is rejected rather than silently truncated. Schema and stored-source failures return 422 before the relevant AI stage.
@@ -37,6 +39,8 @@ Oversized input is rejected rather than silently truncated. Schema and stored-so
 | Inferred wizard skills | 100 entries, 200 characters each |
 
 JSON bounds count the Unicode characters in `json.dumps(..., ensure_ascii=False)`, including structure. They are distinct from the document ingestion byte limits. The final prompt check is a defense at the LLM boundary; source-specific route/schema checks provide the useful 422 response earlier.
+
+Enhancement generation also retains successful items when another item's final prompt is oversized; an entirely failed attempt retains HTTP 422 if it includes a prompt-limit failure. Request-wide validation and legacy analysis failures still abort the request. The shared total deadline always aborts, rather than returning a partial preview.
 
 Regeneration keeps ordinary item failures alongside successful items. Expiry or caller cancellation cancels active and queued work instead of returning a partial success from an abandoned operation. This concurrency limit is per request, not a global provider rate limiter.
 

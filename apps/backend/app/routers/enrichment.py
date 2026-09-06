@@ -338,6 +338,7 @@ async def generate_enhancements(request: EnhanceRequest) -> EnhancementPreview:
     # Generate enhanced descriptions for each item
     enhancements: list[EnhancedDescription] = []
     errors: list[EnhancementItemError] = []
+    first_prompt_error: PromptSizeError | None = None
 
     for item_id, answers in answers_by_item.items():
         item = item_details.get(item_id, {})
@@ -393,21 +394,27 @@ async def generate_enhancements(request: EnhanceRequest) -> EnhancementPreview:
                     enhanced_description=additional_bullets,  # These are NEW bullets to add
                 )
             )
-        except (AIOperationDeadlineExceeded, PromptSizeError):
+        except AIOperationDeadlineExceeded:
             raise
         except Exception as e:
             logger.warning("Failed to enhance item %s: %s", item_id, e, exc_info=e)
+            message = "Failed to enhance this item. Please try again."
+            if isinstance(e, PromptSizeError):
+                first_prompt_error = first_prompt_error or e
+                message = "This item is too large to enhance. Shorten its description or answers."
             errors.append(
                 EnhancementItemError(
                     item_id=item_id,
                     item_type=item.get("item_type", "experience"),
                     title=item.get("title", ""),
                     subtitle=item.get("subtitle"),
-                    message="Failed to enhance this item. Please try again.",
+                    message=message,
                 )
             )
 
     if answers_by_item and not enhancements:
+        if first_prompt_error is not None:
+            raise first_prompt_error
         raise HTTPException(
             status_code=500,
             detail=(

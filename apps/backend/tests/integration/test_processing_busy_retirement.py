@@ -163,6 +163,9 @@ async def test_busy_first_upload_claim_retires_only_its_unclaimed_row(
         assert uploaded_id is not None
         assert response.status_code == 503, response.text
         assert response.headers["retry-after"] == "1"
+        assert response.json().get("resume_id") == uploaded_id
+        assert response.json().get("is_master") is True
+        assert "processing_status" not in response.json()
         assert resumes._PROCESSING_CLEANUP_TASKS
         if replacement != "none":
             await writer.execute(

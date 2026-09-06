@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
+from app.ai_budget import operation_error_content
 from app.config import settings
 from app.database import DatabaseBusyError, db
 from app.pdf import close_pdf_renderer, init_pdf_renderer
@@ -81,7 +82,11 @@ app = FastAPI(
 @app.exception_handler(DatabaseBusyError)
 async def database_busy_handler(request: Request, error: DatabaseBusyError) -> JSONResponse:
     logger.warning("Database write contention for %s", request.url.path, exc_info=error)
-    return JSONResponse(status_code=503, content={"detail": "Database is busy. Please retry shortly."}, headers={"Retry-After": "1"})
+    return JSONResponse(
+        status_code=503,
+        content=operation_error_content(request, "Database is busy. Please retry shortly."),
+        headers={"Retry-After": "1"},
+    )
 
 
 # CORS middleware - origins configurable via CORS_ORIGINS env var

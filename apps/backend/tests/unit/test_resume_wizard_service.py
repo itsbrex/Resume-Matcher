@@ -742,6 +742,149 @@ async def test_ai_turn_full_zero_id_echo_updates_without_duplicating() -> None:
     ] == [(7, ["Updated roadmap"]), (8, ["Updated billing"])]
 
 
+@pytest.mark.parametrize("rewrite", [False, True])
+async def test_ai_turn_full_zero_id_echo_consumes_duplicate_signatures_once(
+    rewrite: bool,
+) -> None:
+    state = _state_on_section("workExperience")
+    descriptions = ["First assignment", "Second assignment"]
+    state.resume_data = ResumeData.model_validate(
+        {
+            "workExperience": [
+                {**_GLOBEX_ROLE, "id": entry_id, "description": [description]}
+                for entry_id, description in zip((7, 8), descriptions)
+            ]
+        }
+    )
+    returned_descriptions = [
+        f"Updated {description}" if rewrite else description
+        for description in descriptions
+    ]
+    response = {
+        "resume_data": {
+            "workExperience": [
+                {**_GLOBEX_ROLE, "id": 0, "description": [description]}
+                for description in returned_descriptions
+            ]
+        }
+    }
+
+    with patch(
+        "app.services.resume_wizard.complete_json",
+        new_callable=AsyncMock,
+        return_value=response,
+    ):
+        result = await run_ai_turn(state, "Review both assignments", skip=False)
+
+    assert [
+        (entry.id, entry.description) for entry in result.resume_data.workExperience
+    ] == [
+        (entry_id, [description])
+        for entry_id, description in zip((7, 8), returned_descriptions)
+    ]
+
+
+async def test_ai_turn_new_entry_legacy_echo_merges_within_same_response() -> None:
+    state = _state_on_section("workExperience")
+    state.resume_data = ResumeData.model_validate(
+        {"workExperience": [{**_GLOBEX_ROLE, "id": 7}]}
+    )
+    legacy_echo = {key: value for key, value in _ACME_ROLE.items() if key != "id"}
+    legacy_echo["description"] = ["More precise new assignment"]
+    response = {
+        "resume_data": {
+            "workExperience": [{**_ACME_ROLE, "id": 0}, legacy_echo]
+        }
+    }
+
+    with patch(
+        "app.services.resume_wizard.complete_json",
+        new_callable=AsyncMock,
+        return_value=response,
+    ):
+        result = await run_ai_turn(state, "Add my Acme assignment", skip=False)
+
+    assert [(entry.id, entry.company) for entry in result.resume_data.workExperience] == [
+        (7, "Globex"),
+        (8, "Acme"),
+    ]
+    assert result.resume_data.workExperience[1].description == [
+        "More precise new assignment"
+    ]
+
+
+async def test_ai_turn_legacy_echo_cannot_clobber_id_based_signature_change() -> None:
+    state = _state_on_section("workExperience")
+    state.resume_data = ResumeData.model_validate(
+        {
+            "workExperience": [
+                {**_GLOBEX_ROLE, "id": 7, "description": ["Original Globex"]},
+                {**_ACME_ROLE, "id": 8, "description": ["Original Acme"]},
+            ]
+        }
+    )
+    globex_echo = {key: value for key, value in _GLOBEX_ROLE.items() if key != "id"}
+    response = {
+        "resume_data": {
+            "workExperience": [
+                {
+                    **_GLOBEX_ROLE,
+                    "id": 8,
+                    "description": ["Corrected assignment"],
+                },
+                {**globex_echo, "description": ["Echoed Globex assignment"]},
+            ]
+        }
+    }
+
+    with patch(
+        "app.services.resume_wizard.complete_json",
+        new_callable=AsyncMock,
+        return_value=response,
+    ):
+        result = await run_ai_turn(state, "Correct Acme, and retain Globex", skip=False)
+
+    assert [entry.id for entry in result.resume_data.workExperience] == [7, 8]
+    assert [entry.description for entry in result.resume_data.workExperience] == [
+        ["Echoed Globex assignment"],
+        ["Corrected assignment"],
+    ]
+
+
+async def test_ai_turn_ambiguous_legacy_signature_preserves_existing_rows() -> None:
+    state = _state_on_section("workExperience")
+    state.resume_data = ResumeData.model_validate(
+        {
+            "workExperience": [
+                {**_GLOBEX_ROLE, "id": 7, "description": ["First assignment"]},
+                {**_GLOBEX_ROLE, "id": 8, "description": ["Second assignment"]},
+            ]
+        }
+    )
+    legacy_echo = {key: value for key, value in _GLOBEX_ROLE.items() if key != "id"}
+    response = {
+        "resume_data": {
+            "workExperience": [
+                {**legacy_echo, "description": ["Ambiguous assignment"]}
+            ]
+        }
+    }
+
+    with patch(
+        "app.services.resume_wizard.complete_json",
+        new_callable=AsyncMock,
+        return_value=response,
+    ):
+        result = await run_ai_turn(state, "Improve that assignment", skip=False)
+
+    assert [entry.id for entry in result.resume_data.workExperience] == [7, 8, 9]
+    assert [entry.description for entry in result.resume_data.workExperience] == [
+        ["First assignment"],
+        ["Second assignment"],
+        ["Ambiguous assignment"],
+    ]
+
+
 async def test_ai_turn_duplicate_known_id_preserves_both_updates() -> None:
     state = _state_on_section("workExperience")
     state.resume_data = ResumeData.model_validate(
@@ -767,6 +910,7 @@ async def test_ai_turn_duplicate_known_id_preserves_both_updates() -> None:
         (7, "Globex"),
         (8, "Acme"),
     ]
+    assert result.resume_data.workExperience[0].description == ["Corrected role"]
 
 
 async def test_ai_turn_legacy_echo_does_not_revert_id_based_update() -> None:

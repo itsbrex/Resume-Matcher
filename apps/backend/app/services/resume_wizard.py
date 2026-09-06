@@ -3,7 +3,7 @@
 import copy
 import json
 import re
-from collections import Counter
+from collections import Counter, deque
 from collections.abc import Callable
 from typing import Any, Protocol
 
@@ -199,11 +199,11 @@ def _merge_entries[T: _IdentifiedEntry](
     """
     result = list(existing)
     id_index: dict[int, int] = {}
-    signature_index: dict[tuple[str, ...], int] = {}
+    signature_positions: dict[tuple[str, ...], deque[int]] = {}
     for position, item in enumerate(result):
         if item.id > 0:
             id_index.setdefault(item.id, position)
-        signature_index.setdefault(key(item), position)
+        signature_positions.setdefault(key(item), deque()).append(position)
     raw_items = raw_updated if isinstance(raw_updated, list) else []
     zero_id_full_echo = (
         len(existing) > 1
@@ -219,24 +219,32 @@ def _merge_entries[T: _IdentifiedEntry](
         raw_item = raw_items[item_index] if item_index < len(raw_items) else None
         has_explicit_id = isinstance(raw_item, dict) and "id" in raw_item
         position = id_index.pop(item.id, None) if item.id > 0 else None
-        if position is None and item.id <= 0 and (
-            not has_explicit_id or zero_id_full_echo
-        ):
-            position = signature_index.get(key(item))
+        if zero_id_full_echo:
+            position = signature_positions[key(item)][0]
+        elif position is None and item.id <= 0 and not has_explicit_id:
+            candidates = signature_positions.get(key(item), deque())
+            if len(candidates) == 1:
+                position = candidates[0]
         if position is not None:
             previous_key = key(result[position])
-            if signature_index.get(previous_key) == position:
-                signature_index.pop(previous_key)
+            candidates = signature_positions.get(previous_key)
+            if candidates is not None:
+                try:
+                    candidates.remove(position)
+                except ValueError:
+                    pass
+                if not candidates:
+                    signature_positions.pop(previous_key)
             item.id = result[position].id
             result[position] = item
-            signature_index[key(item)] = position
             continue
 
         # A positive id unknown to the current draft is not stable identity.
         # Treat it as add intent and let the allocator choose a collision-free id.
         item.id = 0
         result.append(item)
-        signature_index.setdefault(key(item), len(result) - 1)
+        if has_explicit_id:
+            signature_positions.setdefault(key(item), deque()).append(len(result) - 1)
     return result
 
 

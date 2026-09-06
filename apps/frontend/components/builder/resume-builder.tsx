@@ -1028,13 +1028,18 @@ const ResumeBuilderContent = () => {
   ): Promise<boolean> => {
     if (!resumeId || loadingState !== 'loaded') return false;
     const activeResumeId = resumeId;
-    const savedContent = attachmentValuesRef.current.coverLetter;
-    const savedVersion = coverLetterEditVersionRef.current;
     try {
       coverLetterSaveCountRef.current += 1;
       setIsCoverLetterSaving(true);
-      await queueAttachmentWrite(coverLetterSaveQueueRef, () =>
-        updateCoverLetter(activeResumeId, savedContent)
+      // A prior generation or newer edit can replace the value while this save waits.
+      const { savedContent, savedVersion } = await queueAttachmentWrite(
+        coverLetterSaveQueueRef,
+        async () => {
+          const savedContent = attachmentValuesRef.current.coverLetter;
+          const savedVersion = coverLetterEditVersionRef.current;
+          await updateCoverLetter(activeResumeId, savedContent);
+          return { savedContent, savedVersion };
+        }
       );
       if (!documentIsActiveRef.current) return false;
       const baselines = { ...attachmentBaselinesRef.current, coverLetter: savedContent };
@@ -1139,13 +1144,17 @@ const ResumeBuilderContent = () => {
   async function handleSaveOutreach(showSuccess = true, showFailure = true): Promise<boolean> {
     if (!resumeId || loadingState !== 'loaded') return false;
     const activeResumeId = resumeId;
-    const savedContent = attachmentValuesRef.current.outreachMessage;
-    const savedVersion = outreachEditVersionRef.current;
     try {
       outreachSaveCountRef.current += 1;
       setIsOutreachSaving(true);
-      await queueAttachmentWrite(outreachSaveQueueRef, () =>
-        updateOutreachMessage(activeResumeId, savedContent)
+      const { savedContent, savedVersion } = await queueAttachmentWrite(
+        outreachSaveQueueRef,
+        async () => {
+          const savedContent = attachmentValuesRef.current.outreachMessage;
+          const savedVersion = outreachEditVersionRef.current;
+          await updateOutreachMessage(activeResumeId, savedContent);
+          return { savedContent, savedVersion };
+        }
       );
       if (!documentIsActiveRef.current) return false;
       const baselines = { ...attachmentBaselinesRef.current, outreachMessage: savedContent };
@@ -1187,6 +1196,7 @@ const ResumeBuilderContent = () => {
   const doGenerateCoverLetter = async () => {
     if (!resumeId || loadingState !== 'loaded') return;
     const activeResumeId = resumeId;
+    const startingEditVersion = coverLetterEditVersionRef.current;
     setIsGeneratingCoverLetter(true);
     setShowRegenerateDialog(null);
     try {
@@ -1194,14 +1204,17 @@ const ResumeBuilderContent = () => {
         generateCoverLetter(activeResumeId)
       );
       if (!documentIsActiveRef.current) return;
-      coverLetterEditVersionRef.current += 1;
-      setCoverLetter(content);
-      attachmentValuesRef.current = { ...attachmentValuesRef.current, coverLetter: content };
       attachmentBaselinesRef.current = {
         ...attachmentBaselinesRef.current,
         coverLetter: content,
       };
-      setHasUnsavedCoverLetter(false);
+      // Generation persisted this baseline, but subsequent user edits retain priority.
+      if (startingEditVersion === coverLetterEditVersionRef.current) {
+        coverLetterEditVersionRef.current += 1;
+        setCoverLetter(content);
+        attachmentValuesRef.current = { ...attachmentValuesRef.current, coverLetter: content };
+      }
+      setHasUnsavedCoverLetter(attachmentValuesRef.current.coverLetter !== content);
       persistAttachmentDraft();
     } catch (error) {
       if (!documentIsActiveRef.current) return;
@@ -1229,6 +1242,7 @@ const ResumeBuilderContent = () => {
   const doGenerateOutreach = async () => {
     if (!resumeId || loadingState !== 'loaded') return;
     const activeResumeId = resumeId;
+    const startingEditVersion = outreachEditVersionRef.current;
     setIsGeneratingOutreach(true);
     setShowRegenerateDialog(null);
     try {
@@ -1236,14 +1250,16 @@ const ResumeBuilderContent = () => {
         generateOutreachMessage(activeResumeId)
       );
       if (!documentIsActiveRef.current) return;
-      outreachEditVersionRef.current += 1;
-      setOutreachMessage(content);
-      attachmentValuesRef.current = { ...attachmentValuesRef.current, outreachMessage: content };
       attachmentBaselinesRef.current = {
         ...attachmentBaselinesRef.current,
         outreachMessage: content,
       };
-      setHasUnsavedOutreach(false);
+      if (startingEditVersion === outreachEditVersionRef.current) {
+        outreachEditVersionRef.current += 1;
+        setOutreachMessage(content);
+        attachmentValuesRef.current = { ...attachmentValuesRef.current, outreachMessage: content };
+      }
+      setHasUnsavedOutreach(attachmentValuesRef.current.outreachMessage !== content);
       persistAttachmentDraft();
     } catch (error) {
       if (!documentIsActiveRef.current) return;

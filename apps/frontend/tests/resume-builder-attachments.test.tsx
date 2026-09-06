@@ -483,3 +483,54 @@ it.each(['cover-letter', 'outreach'])('orders %s generation after prior saves', 
   window.dispatchEvent(unload);
   expect(unload.defaultPrevented).toBe(false);
 });
+
+describe.each(['cover-letter', 'outreach'] as const)('%s save queued during generation', (tab) => {
+  it.each(['unchanged', 'edit-before-save', 'edit-after-save'] as const)(
+    'keeps server and editor converged for %s content',
+    async (editTiming) => {
+      const generated = deferred<string>();
+      const save = tab === 'cover-letter' ? updateCoverLetter : updateOutreachMessage;
+      const generate = tab === 'cover-letter' ? generateCoverLetter : generateOutreachMessage;
+      const regenerateLabel =
+        tab === 'cover-letter' ? 'coverLetter.regenerate' : 'outreach.regenerate';
+      let serverContent = 'SERVER';
+      currentSearch = `id=a&tab=${tab}`;
+      fetchResume.mockResolvedValue(
+        response({ cover_letter: serverContent, outreach_message: serverContent })
+      );
+      generate.mockImplementationOnce(async () => {
+        serverContent = await generated.promise;
+        return serverContent;
+      });
+      save.mockImplementation(async (_id: string, content: string) => {
+        serverContent = content;
+      });
+      const Builder = await importBuilder();
+      render(<Builder />);
+      const editor = await screen.findByDisplayValue('SERVER');
+      fireEvent.click(screen.getByRole('button', { name: regenerateLabel }));
+      await act(async () =>
+        within(screen.getByRole('dialog')).getByRole('button', { name: regenerateLabel }).click()
+      );
+      expect(generate).toHaveBeenCalledWith('a');
+      expect(editor).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'common.save' })).toBeEnabled();
+      if (editTiming === 'edit-before-save') {
+        fireEvent.change(editor, { target: { value: 'LATEST EDIT' } });
+      }
+      await act(async () => screen.getByRole('button', { name: 'common.save' }).click());
+      expect(save).not.toHaveBeenCalled();
+      if (editTiming === 'edit-after-save') {
+        fireEvent.change(editor, { target: { value: 'LATEST EDIT' } });
+      }
+      await act(async () => generated.resolve('GENERATED'));
+
+      const expected = editTiming === 'unchanged' ? 'GENERATED' : 'LATEST EDIT';
+      expect(serverContent).toBe(expected);
+      expect(screen.getByRole('textbox')).toHaveValue(expected);
+      const unload = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(unload);
+      expect(unload.defaultPrevented).toBe(false);
+    }
+  );
+});

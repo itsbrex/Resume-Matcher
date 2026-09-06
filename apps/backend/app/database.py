@@ -13,8 +13,8 @@ Two engines back one SQLite file:
 import logging
 import shutil
 import sqlite3
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -50,6 +50,21 @@ ProcessingFinishOutcome = Literal["committed", "stale", "missing"]
 
 class DatabaseBusyError(RuntimeError):
     """A write reservation could not be obtained; retry the unchanged request."""
+
+
+@contextmanager
+def _translate_write_errors() -> Iterator[None]:
+    """Expose only SQLite contention as retryable, for async and sync writers."""
+    try:
+        yield
+    except OperationalError as error:
+        code = getattr(error.orig, "sqlite_errorcode", None)
+        if isinstance(code, int) and code & 0xFF in (
+            sqlite3.SQLITE_BUSY,
+            sqlite3.SQLITE_LOCKED,
+        ):
+            raise DatabaseBusyError("Database is busy") from error
+        raise
 
 
 class ResumeNotFoundError(ValueError):
@@ -120,21 +135,24 @@ class Database:
         unlike an in-memory lock. Callers commit the complete operation; closing
         the session rolls back every change if any stage raises.
         """
-        async with self._session() as session:
-            try:
+        with _translate_write_errors():
+            async with self._session() as session:
                 await session.execute(text("BEGIN IMMEDIATE"))
                 yield session
-            except OperationalError as error:
-                code = getattr(error.orig, "sqlite_errorcode", None)
-                if isinstance(code, int) and code & 0xFF in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
-                    raise DatabaseBusyError("Database is busy") from error
-                raise
 
     @property
     def _sync(self) -> sessionmaker[Session]:
         self._ensure_initialized()
         assert self._sync_session_factory is not None
         return self._sync_session_factory
+
+    @contextmanager
+    def _sync_write_session(self) -> Iterator[Session]:
+        """Reserve a synchronous key-store writer with the same busy contract."""
+        with _translate_write_errors():
+            with self._sync() as session:
+                session.execute(text("BEGIN IMMEDIATE"))
+                yield session
 
     async def close(self) -> None:
         """Dispose engines and release file handles."""
@@ -249,7 +267,7 @@ class Database:
             title=title,
             original_markdown=original_markdown,
         )
-        async with self._session() as session:
+        async with self._write_session() as session:
             session.add(row)
             await session.commit()
         return self._resume_to_dict(row)
@@ -330,7 +348,7 @@ class Database:
                 ``ValueError``, so existing ``except ValueError`` callers are
                 unaffected.
         """
-        async with self._session() as session:
+        async with self._write_session() as session:
             row = await session.get(Resume, resume_id)
             if row is None:
                 raise ResumeNotFoundError(resume_id)
@@ -367,7 +385,7 @@ class Database:
                 ),
             )
 
-        async with self._session() as session:
+        async with self._write_session() as session:
             result = await session.execute(
                 update(Resume)
                 .where(Resume.resume_id == resume_id, eligible)
@@ -406,7 +424,7 @@ class Database:
             processed_data if processing_status == "ready" else None
         )
 
-        async with self._session() as session:
+        async with self._write_session() as session:
             result = await session.execute(
                 update(Resume)
                 .where(
@@ -427,7 +445,7 @@ class Database:
 
     async def delete_resume(self, resume_id: str) -> bool:
         """Delete resume by ID."""
-        async with self._session() as session:
+        async with self._write_session() as session:
             row = await session.get(Resume, resume_id)
             if row is None:
                 return False
@@ -485,7 +503,7 @@ class Database:
             )
             for content in contents
         ]
-        async with self._session() as session:
+        async with self._write_session() as session:
             session.add_all(rows)
             await session.commit()
         return [self._job_to_dict(row) for row in rows]
@@ -506,7 +524,7 @@ class Database:
         ``job_keywords``, ``company``/``role``, …) round-trip through
         ``get_job`` as top-level keys.
         """
-        async with self._session() as session:
+        async with self._write_session() as session:
             row = await session.get(Job, job_id)
             if row is None:
                 return None
@@ -523,7 +541,7 @@ class Database:
 
     async def delete_job(self, job_id: str) -> bool:
         """Delete a job by ID (used to clean up an orphaned manual-add job)."""
-        async with self._session() as session:
+        async with self._write_session() as session:
             row = await session.get(Job, job_id)
             if row is None:
                 return False
@@ -543,7 +561,7 @@ class Database:
         """Create an improvement result entry."""
         request_id = str(uuid4())
         now = _now()
-        async with self._session() as session:
+        async with self._write_session() as session:
             session.add(
                 Improvement(
                     request_id=request_id,
@@ -822,7 +840,7 @@ class Database:
 
     def set_api_key_ciphertext(self, provider: str, ciphertext: str) -> None:
         """Upsert one provider's ciphertext (sync)."""
-        with self._sync() as session:
+        with self._sync_write_session() as session:
             row = session.get(ApiKey, provider)
             if row is None:
                 session.add(
@@ -835,7 +853,7 @@ class Database:
 
     def delete_api_key(self, provider: str) -> None:
         """Delete one provider's key (sync)."""
-        with self._sync() as session:
+        with self._sync_write_session() as session:
             row = session.get(ApiKey, provider)
             if row is not None:
                 session.delete(row)
@@ -843,7 +861,7 @@ class Database:
 
     def clear_api_keys(self) -> None:
         """Delete all stored keys (sync)."""
-        with self._sync() as session:
+        with self._sync_write_session() as session:
             session.execute(delete(ApiKey))
             session.commit()
 
@@ -853,7 +871,7 @@ class Database:
         A single transaction means a failure mid-write can't leave the store
         half-cleared and wipe a user's previously saved keys.
         """
-        with self._sync() as session:
+        with self._sync_write_session() as session:
             session.execute(delete(ApiKey))
             now = _now()
             for provider, ciphertext in ciphertexts.items():
@@ -891,7 +909,7 @@ class Database:
         ``api_keys`` are preserved — matching the pre-existing behavior where a
         reset never wiped the user's stored credentials.
         """
-        async with self._session() as session:
+        async with self._write_session() as session:
             await session.execute(delete(Application))
             await session.execute(delete(Improvement))
             await session.execute(delete(Job))

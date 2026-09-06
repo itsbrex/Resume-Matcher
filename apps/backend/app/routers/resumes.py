@@ -809,7 +809,9 @@ async def _await_processing_cleanup(task: asyncio.Task[Any]) -> Any:
     return task.result()
 
 
-async def _retire_processing_attempt(resume_id: str, processing_token: str) -> None:
+async def _retire_processing_attempt(
+    resume_id: str, processing_token: str | None
+) -> None:
     """Keep retrying contention until this attempt is retired or superseded."""
     while True:
         try:
@@ -823,7 +825,9 @@ async def _retire_processing_attempt(resume_id: str, processing_token: str) -> N
             await asyncio.sleep(0.1)
 
 
-async def _finish_cancelled_processing(resume_id: str, processing_token: str) -> None:
+async def _finish_cancelled_processing(
+    resume_id: str, processing_token: str | None
+) -> None:
     """Retire only this attempt, deferring a stalled cleanup after a bounded wait."""
     cleanup = asyncio.create_task(
         _retire_processing_attempt(resume_id, processing_token)
@@ -929,6 +933,11 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
 
     try:
         processing_token = await _claim_processing(resume["resume_id"])
+    except DatabaseBusyError:
+        # This request created the row, but no claim was installed. Retire it
+        # only while its token is still NULL; a concurrent owner/save wins.
+        await _finish_cancelled_processing(resume["resume_id"], None)
+        raise
     except ResumeNotFoundError as e:
         raise HTTPException(
             status_code=404, detail="Resume was deleted during upload processing."

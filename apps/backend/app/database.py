@@ -418,12 +418,14 @@ class Database:
     async def finish_resume_processing(
         self,
         resume_id: str,
-        token: str,
+        token: str | None,
         *,
         processing_status: Literal["ready", "failed"],
         processed_data: dict[str, Any] | None = None,
     ) -> ProcessingFinishOutcome:
-        """Commit a terminal state only while ``token`` owns this resume."""
+        """Finish an owned attempt, or retire an unclaimed row with ``None``."""
+        if token is None and processing_status != "failed":
+            raise ValueError("Ready processing requires an ownership token")
         values: dict[str, Any] = {
             "processing_status": processing_status,
             "processing_token": None,

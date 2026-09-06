@@ -192,6 +192,8 @@ def test_enrichment_uses_valid_legacy_field_when_canonical_field_is_empty() -> N
         '```json\n[{"changes": []}]\n```',
         'Here is the result: [{"changes": []}',
         'Here is the result: [null, {"changes": []}',
+        'Result: ["note, {"changes": [1]}, {"changes": [2]}',
+        'Result: [null, "note, {"changes": []}, {"changes": [2]}',
         "Here is the result: "
         + "[" * 10_000
         + '{"changes": []}'
@@ -202,6 +204,8 @@ def test_enrichment_uses_valid_legacy_field_when_canonical_field_is_empty() -> N
         "fenced",
         "unclosed-array",
         "unclosed-array-with-scalar",
+        "unclosed-array-with-unclosed-string",
+        "unclosed-array-with-scalar-and-unclosed-string",
         "deeply-nested-array",
     ],
 )

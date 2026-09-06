@@ -1401,7 +1401,9 @@ def _object_starts_inside_array(content: str, object_start: int) -> bool:
         # instead of salvaging an object from inside them.
         return True
     except json.JSONDecodeError:
-        return False
+        # An object-like fragment inside an unclosed array string is not a
+        # trustworthy recovery point. Plain bracketed prose remains salvageable.
+        return in_string
     return isinstance(value, list) and not candidate[end:].strip()
 
 

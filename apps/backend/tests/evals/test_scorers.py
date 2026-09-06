@@ -130,6 +130,16 @@ class TestJdKeywordsPresent:
         # "microservices" only appears inside a work-experience bullet.
         assert jd_keywords_present(sample_resume, ["microservices"]) == 1.0
 
+    @pytest.mark.parametrize(
+        "surrounding", [("𠀀", "𰀀"), ("개발", "개발"), ("ᄀ", "ᄂ")]
+    )
+    def test_extended_cjk_boundaries_preserve_latin_terms(
+        self, surrounding: tuple[str, str]
+    ) -> None:
+        before, after = surrounding
+        assert jd_keywords_present({"summary": f"{before}Java{after}"}, ["Java"]) == 1.0
+        assert jd_keywords_present({"summary": f"{before}JavaScript{after}"}, ["Java"]) == 0.0
+
 
 class TestIsValidResume:
     def test_well_formed_resume_is_valid(self, sample_resume):

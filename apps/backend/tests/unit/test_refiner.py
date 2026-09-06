@@ -59,14 +59,17 @@ async def test_refinement_stats_count_retained_cjk_keyword(
     complete.assert_awaited_once()
 
 
+@pytest.mark.parametrize(
+    "summary", ["熟悉Java开发", "𠀀Java𰀀", "개발Java개발", "ᄀJavaᄂ"]
+)
 async def test_refinement_stats_count_latin_keyword_adjacent_to_cjk(
-    sample_resume: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    sample_resume: dict[str, Any], monkeypatch: pytest.MonkeyPatch, summary: str
 ) -> None:
     initial = copy.deepcopy(sample_resume)
     master = copy.deepcopy(initial)
-    master["summary"] = "熟悉Java开发"
+    master["summary"] = summary
     injected = copy.deepcopy(initial)
-    injected["summary"] = "熟悉Java开发"
+    injected["summary"] = summary
     complete = AsyncMock(return_value=injected)
     monkeypatch.setattr("app.services.refiner.complete_json", complete)
 
@@ -85,6 +88,13 @@ async def test_refinement_stats_count_latin_keyword_adjacent_to_cjk(
     assert result.to_stats().keywords_injected == 1
     assert result.final_match_percentage == 100.0
     complete.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "summary", ["𠀀JavaScript𰀀", "개발JavaScript개발", "ᄀJavaScriptᄂ"]
+)
+def test_cjk_boundaries_do_not_split_latin_terms(summary: str) -> None:
+    assert count_retained_keywords(["Java"], {"summary": summary}) == 0
 
 
 class TestRemoveAiPhrases:

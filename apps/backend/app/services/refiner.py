@@ -36,17 +36,22 @@ logger = logging.getLogger(__name__)
 # LLM-012: Job description truncation limits
 MAX_JD_LENGTH = 2000
 MIN_TRUNCATION_WARNING_LENGTH = 1500
-_CJK_CHAR_CLASS = r"[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]"
+# Han (including supplementary planes), Kana, and Hangul syllables/Jamo.
+_CJK_CHAR_CLASS = (
+    r"[\u1100-\u11ff\u3040-\u30ff\u3130-\u318f\u31f0-\u31ff"
+    r"\u3400-\u9fff\ua960-\ua97f\uac00-\ud7ff\uf900-\ufaff"
+    r"\uff66-\uffdc\U0001b000-\U0001b16f\U00020000-\U0003ffff]"
+)
 _CJK_RE = re.compile(_CJK_CHAR_CLASS)
 
 
 def _keyword_in_text(keyword: str, text: str) -> bool:
     """Check for a CJK substring or a bounded non-CJK term in text.
 
-    CJK scripts do not require whitespace between terms, so a CJK character is
-    also a boundary for an adjacent Latin term. Other word characters retain
-    boundaries so 'python' does not match 'pythonic' and 'java' does not match
-    'javascript'.
+    Han, Kana, and Hangul characters may adjoin Latin skills without whitespace,
+    so they also form boundaries for adjacent Latin terms. Other word characters
+    retain boundaries so 'python' does not match 'pythonic' and 'java' does not
+    match 'javascript'.
     """
     normalized_keyword = keyword.strip().lower()
     if not normalized_keyword:

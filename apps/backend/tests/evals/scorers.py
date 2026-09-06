@@ -30,7 +30,12 @@ from pydantic import ValidationError
 from app.schemas import ResumeData
 from app.services.parser import has_meaningful_resume_content
 
-_CJK_CHAR_CLASS = r"[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]"
+# Keep the eval implementation independent while covering Han, Kana, and Hangul.
+_CJK_CHAR_CLASS = (
+    r"[\u1100-\u11ff\u3040-\u30ff\u3130-\u318f\u31f0-\u31ff"
+    r"\u3400-\u9fff\ua960-\ua97f\uac00-\ud7ff\uf900-\ufaff"
+    r"\uff66-\uffdc\U0001b000-\U0001b16f\U00020000-\U0003ffff]"
+)
 _CJK_RE = re.compile(_CJK_CHAR_CLASS)
 
 # Top-level resume sections whose presence we care about. ``workExperience``

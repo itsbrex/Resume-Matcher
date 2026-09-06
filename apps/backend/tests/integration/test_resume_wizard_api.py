@@ -146,7 +146,7 @@ async def test_finalize_creates_ready_master_resume(isolated_db) -> None:
 
 
 async def test_finalize_replays_identical_wizard_master_without_duplication(
-    isolated_db,
+    isolated_db: Database,
 ) -> None:
     state = build_initial_wizard_state()
     state.resume_data.personalInfo.name = "James"
@@ -164,7 +164,7 @@ async def test_finalize_replays_identical_wizard_master_without_duplication(
 
 
 async def test_finalize_rejects_different_draft_after_wizard_master_exists(
-    isolated_db,
+    isolated_db: Database,
 ) -> None:
     first_state = build_initial_wizard_state()
     first_state.resume_data.personalInfo.name = "James"

@@ -512,6 +512,25 @@ def _preserve_personal_info(
     return result, warnings
 
 
+def _finalized_refinement_stats(
+    stats: RefinementStats,
+    applied_keywords: list[str],
+    finalized_data: dict[str, Any],
+    job_keywords: dict[str, Any],
+) -> RefinementStats:
+    """Report only keyword changes retained in the finalized resume."""
+    return stats.model_copy(
+        update={
+            "keywords_injected": count_retained_keywords(
+                applied_keywords, finalized_data
+            ),
+            "final_match_percentage": calculate_keyword_match(
+                finalized_data, job_keywords
+            ),
+        }
+    )
+
+
 def _build_ats_score(
     improved_data: dict[str, Any],
     job_keywords: dict[str, Any],
@@ -1278,15 +1297,11 @@ async def _improve_preview_flow(
             grounding_review_warnings(original_resume_data, improved_data)
         )
         if refinement_stats is not None and refinement_result is not None:
-            refinement_stats = refinement_stats.model_copy(
-                update={
-                    "keywords_injected": count_retained_keywords(
-                        refinement_result.keywords_applied, improved_data
-                    ),
-                    "final_match_percentage": calculate_keyword_match(
-                        improved_data, job_keywords
-                    ),
-                }
+            refinement_stats = _finalized_refinement_stats(
+                refinement_stats,
+                refinement_result.keywords_applied,
+                improved_data,
+                job_keywords,
             )
 
     progress["stage"] = "register_preview"
@@ -1671,15 +1686,11 @@ async def improve_resume_endpoint(
                 grounding_review_warnings(original_resume_data, improved_data)
             )
             if refinement_stats is not None and refinement_result is not None:
-                refinement_stats = refinement_stats.model_copy(
-                    update={
-                        "keywords_injected": count_retained_keywords(
-                            refinement_result.keywords_applied, improved_data
-                        ),
-                        "final_match_percentage": calculate_keyword_match(
-                            improved_data, job_keywords
-                        ),
-                    }
+                refinement_stats = _finalized_refinement_stats(
+                    refinement_stats,
+                    refinement_result.keywords_applied,
+                    improved_data,
+                    job_keywords,
                 )
 
         # Convert improved data to JSON string for storage

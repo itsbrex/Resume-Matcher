@@ -182,8 +182,10 @@ def test_enrichment_uses_valid_legacy_field_when_canonical_field_is_empty() -> N
     [
         'Here is the result: [{"changes": []}]',
         '```json\n[{"changes": []}]\n```',
+        'Here is the result: [{"changes": []}',
+        'Here is the result: [null, {"changes": []}',
     ],
-    ids=["prose-prefixed", "fenced"],
+    ids=["prose-prefixed", "fenced", "unclosed-array", "unclosed-array-with-scalar"],
 )
 async def test_top_level_array_gets_corrective_retry(
     monkeypatch: pytest.MonkeyPatch,

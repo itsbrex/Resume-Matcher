@@ -1359,20 +1359,25 @@ def _strip_thinking_tags(content: str) -> str:
 
 
 def _object_starts_inside_array(content: str, object_start: int) -> bool:
-    """Return whether an earlier bracket opens an array around the object."""
-    array_start = content.find("[")
-    while 0 <= array_start < object_start:
-        candidate = content[array_start:]
-        try:
-            value, end = json.JSONDecoder().raw_decode(candidate)
-        except json.JSONDecodeError:
-            # An unmatched prose/citation bracket is not a JSON array boundary.
-            pass
-        else:
-            if isinstance(value, list) and array_start + end > object_start:
-                return True
-        array_start = content.find("[", array_start + 1)
-    return False
+    """Reject enclosed objects even when their outer array is truncated."""
+    array_depth = 0
+    in_string = False
+    escaped = False
+    for char in content[:object_start]:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char == "[":
+            array_depth += 1
+        elif char == "]":
+            array_depth = max(0, array_depth - 1)
+    return array_depth > 0
 
 
 def _extract_json(content: str, _depth: int = 0) -> str:

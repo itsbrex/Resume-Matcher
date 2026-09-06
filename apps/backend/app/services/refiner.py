@@ -34,19 +34,25 @@ logger = logging.getLogger(__name__)
 # LLM-012: Job description truncation limits
 MAX_JD_LENGTH = 2000
 MIN_TRUNCATION_WARNING_LENGTH = 1500
+_CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]")
 
 
 def _keyword_in_text(keyword: str, text: str) -> bool:
-    """Check if keyword exists as a whole term in text.
+    """Check for a CJK substring or a non-CJK whole term in text.
 
-    SVC-010: Uses term boundaries instead of substring matching to avoid
-    false positives like 'python' matching 'pythonic' or 'go' matching 'going'.
+    CJK scripts do not require whitespace between terms. Other scripts retain
+    boundaries so 'python' does not match 'pythonic' and 'go' does not match
+    'going'.
     """
-    escaped = re.escape(keyword.strip().lower())
-    if not escaped:
+    normalized_keyword = keyword.strip().lower()
+    if not normalized_keyword:
         return False
+    normalized_text = text.lower()
+    if _CJK_RE.search(normalized_keyword):
+        return normalized_keyword in normalized_text
+    escaped = re.escape(normalized_keyword)
     pattern = rf"(?<!\w){escaped}(?!\w)"
-    return bool(re.search(pattern, text.lower()))
+    return bool(re.search(pattern, normalized_text))
 
 
 def count_retained_keywords(keywords: list[str], resume: dict[str, Any]) -> int:

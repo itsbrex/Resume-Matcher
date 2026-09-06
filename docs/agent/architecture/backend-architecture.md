@@ -100,7 +100,8 @@ through `llm.py`. Both apply PRAGMAs `journal_mode=WAL`, `foreign_keys=ON`,
 **Single-master invariant** is enforced by a partial unique index on `is_master`.
 Master replacement and tracker read-modify-write operations reserve SQLite writes
 with `BEGIN IMMEDIATE`, including across Database instances.
-**Jobs' dynamic fields** (`job_keywords`, `company`/`role`) are stored in
+**Jobs' dynamic fields** (`job_keywords`, `job_keywords_hash`, `company`/`role`,
+`preview_hash`, `preview_hashes`, and `preview_prompt_id`) are stored in
 `metadata_json` and flattened on read; immutable preview identity, fingerprints,
 claims and cached confirmation responses live in `tailoring_previews`.
 See [storage transactions](storage-transactions.md) and [confirmation](../features/preview-confirmation.md).

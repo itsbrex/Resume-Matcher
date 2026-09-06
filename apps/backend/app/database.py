@@ -870,6 +870,76 @@ class Database:
             if row.position != index:
                 row.position = index
 
+    async def _insert_application(
+        self,
+        session: AsyncSession,
+        *,
+        job_id: str,
+        resume_id: str,
+        master_resume_id: str | None = None,
+        status: str = "applied",
+        company: str | None = None,
+        role: str | None = None,
+        applied_at: str | None = None,
+        notes: str | None = None,
+    ) -> Application:
+        """Stage one card with shared date and ordering rules, without committing."""
+        now = _now()
+        if applied_at is None and status != "saved":
+            applied_at = now
+        position = await self._next_position(session, status)
+        row = Application(
+            application_id=str(uuid4()),
+            job_id=job_id,
+            resume_id=resume_id,
+            master_resume_id=master_resume_id,
+            status=status,
+            company=company,
+            role=role,
+            applied_at=applied_at,
+            notes=notes,
+            position=position,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(row)
+        return row
+
+    async def create_manual_application(
+        self,
+        *,
+        content: str,
+        resume_id: str,
+        status: str = "applied",
+        company: str | None = None,
+        role: str | None = None,
+        notes: str | None = None,
+    ) -> dict[str, Any]:
+        """Commit a pasted job and its tracker card together, or roll back both."""
+        async with self._write_session() as session:
+            job = Job(
+                job_id=str(uuid4()),
+                content=content,
+                resume_id=resume_id,
+                created_at=_now(),
+                metadata_json=(
+                    {"company": company, "role": role} if company or role else {}
+                ),
+            )
+            session.add(job)
+            await session.flush()
+            row = await self._insert_application(
+                session,
+                job_id=job.job_id,
+                resume_id=resume_id,
+                status=status,
+                company=company,
+                role=role,
+                notes=notes,
+            )
+            await session.commit()
+            return self._application_to_dict(row)
+
     async def create_application(
         self,
         job_id: str,
@@ -904,12 +974,8 @@ class Database:
             if found is not None:
                 return self._application_to_dict(found)
 
-            now = _now()
-            if applied_at is None and status != "saved":
-                applied_at = now
-            position = await self._next_position(session, status)
-            row = Application(
-                application_id=str(uuid4()),
+            row = await self._insert_application(
+                session,
                 job_id=job_id,
                 resume_id=resume_id,
                 master_resume_id=master_resume_id,
@@ -918,11 +984,7 @@ class Database:
                 role=role,
                 applied_at=applied_at,
                 notes=notes,
-                position=position,
-                created_at=now,
-                updated_at=now,
             )
-            session.add(row)
             try:
                 await session.commit()
             except IntegrityError:

@@ -214,7 +214,7 @@ class TestRobustnessFixes:
         """If application creation fails, the just-created job is removed."""
         with patch.object(
             isolated_db,
-            "create_application",
+            "_insert_application",
             new_callable=AsyncMock,
             side_effect=RuntimeError("boom"),
         ):

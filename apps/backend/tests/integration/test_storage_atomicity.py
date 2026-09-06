@@ -336,7 +336,7 @@ async def test_job_upload_contention_is_retryable_without_partial_batch(isolated
 async def test_busy_manual_card_creation_cleans_up_its_job(isolated_db: Database, monkeypatch: pytest.MonkeyPatch) -> None:
     from app.database import DatabaseBusyError
     from unittest.mock import AsyncMock
-    monkeypatch.setattr(isolated_db, "create_application", AsyncMock(side_effect=DatabaseBusyError("synthetic contention")))
+    monkeypatch.setattr(isolated_db, "_insert_application", AsyncMock(side_effect=DatabaseBusyError("synthetic contention")))
     async with AsyncClient(transport=ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test") as client:
         response = await client.post("/api/v1/applications", json={"resume_id": "synthetic", "job_description": "Engineer", "company": "Acme", "role": "Engineer"})
     assert response.status_code == 503

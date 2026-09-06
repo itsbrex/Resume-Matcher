@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 import pytest
@@ -79,13 +79,22 @@ async def test_page_cleanup_failure_does_not_replay_a_healthy_export(
     healthy = asyncio.create_task(pdf.render_resume_pdf(RESUME_PRINT_DATA_URL))
     try:
         await asyncio.wait_for(healthy_started.wait(), 2)
+        drain_entered = asyncio.Event()
+        original_wait = pdf._browser_users[browser].drained.wait
+
+        async def wait_for_users() -> bool:
+            drain_entered.set()
+            return await original_wait()
+
+        monkeypatch.setattr(pdf._browser_users[browser].drained, "wait", wait_for_users)
         unhealthy_results = await asyncio.gather(*(
             pdf.render_resume_pdf(unhealthy_url) for _ in range(failed_exports)
         ))
         assert all(result.startswith(b"%PDF") for result in unhealthy_results)
         assert pdf._browser is None
-        # Let the real retirement owner run while the healthy page is active.
-        await asyncio.sleep(0.1)
+        await asyncio.wait_for(drain_entered.wait(), 2)
+        assert close_calls == 0, "Retirement closed a generation still in use"
+        assert pdf._active_renders == 2  # Healthy request plus failed-page cleanup.
         continue_healthy.set()
         healthy_result = await healthy
         assert healthy_result.startswith(b"%PDF")
@@ -133,7 +142,7 @@ async def test_real_driver_stop_settles_retirement_after_browser_close_error(
         # Signal zero only observes this test's own launched Chromium PID.
         with pytest.raises(ProcessLookupError):
             os.kill(browser_pid, 0)
-        await asyncio.sleep(0)
+        await asyncio.wait_for(asyncio.shield(owner), 3)
         assert owner.done(), "Stopped driver and reaped Chromium still retain capacity"
         assert pdf._active_renders == 0
     finally:
@@ -162,6 +171,18 @@ async def test_pending_driver_stop_retains_capacity_and_shutdown_waits(
     original_stop = driver.stop
     stopping = asyncio.Event()
     release_stop = asyncio.Event()
+    shutdown_wait_entered = asyncio.Event()
+    allow_shutdown_wait = asyncio.Event()
+    original_wait = asyncio.wait
+
+    async def wait_for_owners(
+        owners: set[asyncio.Task[None]], *, timeout: float
+    ) -> tuple[set[asyncio.Task[None]], set[asyncio.Task[None]]]:
+        assert owner in owners
+        assert timeout == pdf._PDF_CLEANUP_RESERVE_SECONDS
+        shutdown_wait_entered.set()
+        await allow_shutdown_wait.wait()
+        return await original_wait(owners, timeout=timeout)
 
     async def stop() -> None:
         stopping.set()
@@ -175,13 +196,14 @@ async def test_pending_driver_stop_retains_capacity_and_shutdown_waits(
     shutdown: asyncio.Task[None] | None = None
     try:
         await asyncio.wait_for(stopping.wait(), 2)
-        await asyncio.sleep(0)
         assert pdf._active_renders == 1, "Pending driver teardown released capacity"
         with pytest.raises(pdf.PDFRenderOverloadedError):
             await pdf.render_resume_pdf(RESUME_PRINT_DATA_URL)
+        monkeypatch.setattr(asyncio, "wait", wait_for_owners)
         shutdown = asyncio.create_task(pdf.close_pdf_renderer())
-        await asyncio.sleep(0.02)
+        await asyncio.wait_for(shutdown_wait_entered.wait(), 2)
         assert not shutdown.done(), "Shutdown ignored owned retirement"
+        allow_shutdown_wait.set()
         if not release_during_shutdown:
             await asyncio.wait_for(shutdown, 2)
             assert owner in pdf._background_owners and not owner.done()
@@ -191,6 +213,7 @@ async def test_pending_driver_stop_retains_capacity_and_shutdown_waits(
         await asyncio.wait_for(asyncio.shield(owner), 2)
         assert pdf._active_renders == 0
     finally:
+        allow_shutdown_wait.set()
         release_stop.set()
         await original_stop()
         if not owner.done():
@@ -226,27 +249,140 @@ async def test_failed_one_shot_driver_stop_cannot_acknowledge_a_live_browser(
     assert owner is not None
     try:
         await asyncio.wait_for(stop_failed.wait(), 2)
-        await asyncio.sleep(0.15)
+        with pytest.raises(pdf.PDFRenderError, match="restart"):
+            await asyncio.wait_for(asyncio.shield(owner), 2)
         assert browser.is_connected()
         # The first public stop call marks the context exited before failing;
         # calling it again is a no-op, not proof that the live driver stopped.
         assert pdf._active_renders == 1
         assert pdf._quarantined_browsers.get(browser) is driver
         assert owner.done() and not owner.cancelled()
-        with pytest.raises(pdf.PDFRenderError, match="restart"):
-            await owner
         await pdf.close_pdf_renderer()
         assert "quarantined browser generations" in caplog.text
         assert pdf._active_renders == 1
     finally:
         # Direct invocation is only a test cleanup for the owned real driver,
         # deliberately bypassing its now-disabled public stop wrapper.
-        await original_stop_async()
-        if not owner.done():
-            owner.cancel()
-        await asyncio.gather(owner, return_exceptions=True)
-        # Restore test state only after independently stopping this test's
-        # driver. Production intentionally keeps its quarantined reservation.
-        if browser in pdf._quarantined_browsers:
-            pdf._quarantined_browsers.pop(browser)
-            pdf._release_render_slot()
+        # A cleanup error must still restore test state, without asserting
+        # that the real driver stopped or releasing production quarantine.
+        await _restore_quarantined_test_driver(browser, owner, original_stop_async)
+
+
+async def _restore_quarantined_test_driver(
+    browser: Browser,
+    owner: asyncio.Task[None],
+    stop: Callable[[], Awaitable[None]],
+) -> None:
+    """Restore test state without treating this as production teardown proof."""
+    try:
+        await stop()
+    finally:
+        try:
+            if not owner.done():
+                owner.cancel()
+            await asyncio.gather(owner, return_exceptions=True)
+        finally:
+            if browser in pdf._quarantined_browsers:
+                pdf._quarantined_browsers.pop(browser)
+                pdf._release_render_slot()
+
+
+async def test_quarantine_test_cleanup_restores_state_when_stop_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    browser = await _warm_browser()
+    driver = pdf._playwright
+    assert driver is not None
+    original_stop = driver.stop
+
+    async def fail_close() -> None:
+        raise PlaywrightError("synthetic close failure")
+
+    async def fail_stop() -> None:
+        raise PlaywrightError("synthetic stop failure")
+
+    async def stop_then_fail() -> None:
+        await original_stop()
+        raise RuntimeError("test cleanup sentinel")
+
+    monkeypatch.setattr(browser, "close", fail_close)
+    monkeypatch.setattr(driver, "stop", fail_stop)
+    owner = pdf._retire_shared_browser(browser)
+    assert owner is not None
+    try:
+        with pytest.raises(pdf.PDFRenderError, match="restart"):
+            await asyncio.wait_for(asyncio.shield(owner), 2)
+        with pytest.raises(RuntimeError, match="test cleanup sentinel"):
+            await _restore_quarantined_test_driver(browser, owner, stop_then_fail)
+        assert browser not in pdf._quarantined_browsers
+        assert owner not in pdf._background_owners
+        assert pdf._active_renders == 0
+    finally:
+        await original_stop()
+        pdf._quarantined_browsers.pop(browser, None)
+        # This regression owns all state and has stopped its real driver.
+        pdf._active_renders = 0
+
+
+@pytest.mark.parametrize("cancel_before_start", [False, True])
+@pytest.mark.parametrize("retain_slot", [False, True])
+async def test_cancelled_retirement_keeps_live_generation_owned(
+    monkeypatch: pytest.MonkeyPatch,
+    cancel_before_start: bool,
+    retain_slot: bool,
+) -> None:
+    browser = await _warm_browser()
+    driver = pdf._playwright
+    assert driver is not None
+    healthy_started = asyncio.Event()
+    release_healthy = asyncio.Event()
+    drain_entered = asyncio.Event()
+    original_render = pdf._render_page_to_pdf
+    rendered_pages: list[Page] = []
+
+    async def render(page: Page, url: str, *args: Any) -> bytes:
+        rendered_pages.append(page)
+        healthy_started.set()
+        await release_healthy.wait()
+        return await original_render(page, url, *args)
+
+    monkeypatch.setattr(pdf, "_render_page_to_pdf", render)
+    healthy = asyncio.create_task(pdf.render_resume_pdf(RESUME_PRINT_DATA_URL))
+    owner: asyncio.Task[None] | None = None
+    try:
+        await asyncio.wait_for(healthy_started.wait(), 2)
+        users = pdf._browser_users[browser]
+        original_wait = users.drained.wait
+
+        async def wait_for_users() -> bool:
+            drain_entered.set()
+            return await original_wait()
+
+        monkeypatch.setattr(users.drained, "wait", wait_for_users)
+        owner = pdf._retire_shared_browser(browser, retain_slot=retain_slot)
+        assert owner is not None
+        if not cancel_before_start:
+            await asyncio.wait_for(drain_entered.wait(), 2)
+        owner.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await owner
+        assert browser.is_connected()
+        assert pdf._quarantined_browsers.get(browser) is driver
+        assert owner not in pdf._background_owners
+        assert pdf._active_renders == 2  # Healthy request plus unclosed generation.
+        release_healthy.set()
+        result = await asyncio.wait_for(healthy, 2)
+        assert result.startswith(b"%PDF") and len(rendered_pages) == 1
+        assert not pdf._browser_users
+        assert pdf._active_renders == 1
+    finally:
+        release_healthy.set()
+        await asyncio.gather(healthy, return_exceptions=True)
+        if owner is not None:
+            if not owner.done():
+                owner.cancel()
+            await asyncio.gather(owner, return_exceptions=True)
+        await driver.stop()
+        pdf._quarantined_browsers.pop(browser, None)
+        # Only test-owned resources are present; stop completed above.
+        pdf._active_renders = 0

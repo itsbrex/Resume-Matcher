@@ -46,7 +46,9 @@ Retirement immediately removes that browser from the cache, so new exports canno
 join it. Existing exports keep using their own pages until their render and page
 cleanup scopes finish; only then does the retirement owner close the shared
 browser. Concurrent cleanup failures therefore retire that generation only once
-without aborting or replaying healthy exports.
+without aborting or replaying healthy exports. The retirement reservation owns
+unclosed resources independently of the existing exports' request slots; it is
+kept while those exports use their existing deadlines to finish.
 
 A successful stop of the owned Playwright driver is a teardown acknowledgement,
 even if its Browser object retains a stale `is_connected()` flag. If driver
@@ -57,6 +59,10 @@ as proof of teardown. Quarantine logs the failure and completes the cleanup task
 instead of leaving an unsignalled waiter. Application shutdown reports any
 quarantined generations and waits for still-active cleanup owners within the
 cleanup reserve; it does not cancel them or release their capacity prematurely.
+If an external shutdown cancels retirement before teardown is acknowledged,
+including before the cleanup task first runs, its browser/driver and reservation
+move into the same terminal quarantine. Cancellation still propagates. This
+retains explicit ownership; it does not claim the browser was physically stopped.
 
 ## Query Parameters
 

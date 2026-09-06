@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any, Awaitable, NoReturn, Optional, TypeVar
 
@@ -653,6 +654,24 @@ def _retain_render_slot_for_cleanup() -> None:
         _active_renders += 1
 
 
+def _quarantine_browser(
+    browser: Browser,
+    playwright: Playwright | None,
+    *,
+    retains_slot: bool,
+) -> None:
+    """Keep terminal cleanup ownership without acknowledging an unproven stop."""
+    if browser in _quarantined_browsers:
+        return
+    _quarantined_browsers[browser] = playwright
+    if not retains_slot:
+        _retain_render_slot_for_cleanup()
+    logger.error(
+        "PDF browser cleanup is quarantined; capacity remains reserved "
+        "until application restart"
+    )
+
+
 async def _close_retired_browser(
     browser: Browser,
     playwright: Playwright | None,
@@ -661,6 +680,7 @@ async def _close_retired_browser(
     users_drained: asyncio.Event | None = None,
 ) -> None:
     """Drain the retired generation, then own capacity through driver teardown."""
+    teardown_confirmed = False
     try:
         if users_drained is not None:
             await users_drained.wait()
@@ -686,26 +706,31 @@ async def _close_retired_browser(
         if not teardown_confirmed:
             # Playwright.stop is one-shot: a subsequent call after failure can
             # be a no-op. Never treat that as proof the driver has terminated.
-            _quarantined_browsers[browser] = playwright
-            if not release_slot:
-                _retain_render_slot_for_cleanup()
-            release_slot = False
-            logger.error(
-                "PDF browser cleanup is quarantined; capacity remains reserved "
-                "until application restart"
-            )
             raise PDFRenderError(
                 "PDF renderer cleanup failed. Please restart the application."
             )
     finally:
-        if release_slot:
+        if not teardown_confirmed:
+            # Cancellation during the drain or teardown is not a stop receipt.
+            _quarantine_browser(browser, playwright, retains_slot=release_slot)
+        elif release_slot:
             _release_render_slot()
 
 
-def _retired_browser_finished(owner: asyncio.Task[None]) -> None:
+def _retired_browser_finished(
+    owner: asyncio.Task[None],
+    *,
+    browser: Browser,
+    playwright: Playwright | None,
+    retains_slot: bool,
+) -> None:
     """Observe retirement errors; terminal failures retain explicit ownership."""
     _background_owners.discard(owner)
-    if not owner.cancelled():
+    if owner.cancelled():
+        # A task cancelled before its first step never executes its finally.
+        # Idempotent quarantine also covers cancellation handled there.
+        _quarantine_browser(browser, playwright, retains_slot=retains_slot)
+    else:
         error = owner.exception()
         if error is not None:
             logger.error(
@@ -735,7 +760,14 @@ def _retire_shared_browser(browser: Browser, *, retain_slot: bool = True) -> asy
         )
     )
     _background_owners.add(owner)
-    owner.add_done_callback(_retired_browser_finished)
+    owner.add_done_callback(
+        partial(
+            _retired_browser_finished,
+            browser=browser,
+            playwright=playwright,
+            retains_slot=retain_slot,
+        )
+    )
     return owner
 
 

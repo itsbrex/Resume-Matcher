@@ -476,6 +476,61 @@ async def test_deleted_result_is_not_recreated_or_retained_in_replay_storage(
     resumes.generate_resume_title.assert_awaited_once()
 
 
+async def test_new_explicit_preview_recovers_after_deleted_tokenless_result(
+    isolated_db: Database,
+    confirmation_client: AsyncClient,
+    sample_resume: dict[str, Any],
+) -> None:
+    payload = await preview_payload(isolated_db, confirmation_client, sample_resume)
+    first = await confirmation_client.post(
+        "/api/v1/resumes/improve/confirm", json=payload
+    )
+    assert first.status_code == 200, first.text
+    deleted_id = first.json()["data"]["resume_id"]
+    deleted = await confirmation_client.delete(f"/api/v1/resumes/{deleted_id}")
+    assert deleted.status_code == 200, deleted.text
+
+    preview = await confirmation_client.post(
+        "/api/v1/resumes/improve/preview",
+        json={"resume_id": payload["resume_id"], "job_id": payload["job_id"]},
+    )
+    assert preview.status_code == 200, preview.text
+    fresh = preview.json()["data"]
+    assert fresh["preview_id"] != payload["preview_id"]
+    assert fresh["resume_preview"] == payload["improved_data"]
+
+    # Without an operation ID the server cannot distinguish a lost old retry
+    # from acceptance of this new identical proposal. Do not resurrect the old one.
+    tokenless = {key: value for key, value in payload.items() if key != "preview_id"}
+    replay = await confirmation_client.post(
+        "/api/v1/resumes/improve/confirm", json=tokenless
+    )
+    assert replay.status_code == 409, replay.text
+    assert len(await isolated_db.list_resumes()) == 1
+    resumes.generate_resume_title.assert_awaited_once()
+
+    fresh_payload = {**payload, "preview_id": fresh["preview_id"]}
+    confirmed = await confirmation_client.post(
+        "/api/v1/resumes/improve/confirm", json=fresh_payload
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    new_id = confirmed.json()["data"]["resume_id"]
+    assert new_id != deleted_id
+    assert await isolated_db.get_resume(deleted_id) is None
+    assert {row["resume_id"] for row in await isolated_db.list_resumes()} == {
+        payload["resume_id"], new_id,
+    }
+    repeated = await confirmation_client.post(
+        "/api/v1/resumes/improve/confirm", json=fresh_payload
+    )
+    assert repeated.json() == confirmed.json()
+    assert resumes.generate_resume_title.await_count == 2
+    async with isolated_db._session() as session:
+        old = await session.get(TailoringPreview, payload["preview_id"])
+        assert old is not None and old.response_data is None
+        assert old.result_resume_id == deleted_id
+
+
 async def test_expired_claim_can_be_recovered_without_old_owner_committing_or_releasing_it(
     isolated_db: Database,
     confirmation_client: AsyncClient,

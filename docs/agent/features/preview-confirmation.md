@@ -18,7 +18,9 @@ Tailoring preview and confirmation use durable SQLite operations. A preview bind
 }
 ```
 
-The example abbreviates `improved_data`: send the complete, unchanged `resume_preview` returned by preview. The frontend forwards the operation ID. For older clients omitting it, the server resolves the newest registered operation matching the source, job, and canonical payload hash. Metadata-only previews created before this upgrade must be recomputed. Clients should always send the ID to distinguish identical previews.
+The example abbreviates `improved_data`: send the complete, unchanged `resume_preview` returned by preview. The frontend forwards the operation ID. For older clients omitting it, the server first prefers the newest consumed operation matching the source, job, and canonical payload hash; only when none exists does it select the newest unexpired, unconsumed operation. This preserves retry identity rather than treating an ambiguous retry as acceptance of a new identical proposal. Metadata-only previews created before this upgrade must be recomputed. Clients should always send the ID to distinguish identical previews.
+
+If a matched consumed operation refers to a deleted result, a tokenless confirmation returns 409 even when a new identical preview exists. To deliberately create a replacement, request a new preview and send its new `preview_id` on confirmation. The new explicit operation succeeds independently; the old consumed marker remains content-free and cannot recreate the deleted result.
 
 | Outcome | HTTP behavior |
 | --- | --- |

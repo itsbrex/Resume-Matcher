@@ -65,6 +65,7 @@ import {
   type ResumeDraftEnvelope,
 } from '@/lib/utils/resume-draft-storage';
 import type { RegenerateItemInput } from '@/lib/api/enrichment';
+import { clearResumeWizardCompletion } from '@/lib/utils/resume-wizard-storage';
 import {
   clearAttachmentDraft,
   readAttachmentDraft,
@@ -622,6 +623,13 @@ const ResumeBuilderContent = () => {
     improvedInterviewPrep,
     resumeId,
   ]);
+
+  useEffect(() => {
+    // Scheduling navigation cannot acknowledge that the created resume opened.
+    // This identity-keyed builder retires recovery only after its validated
+    // server baseline is available; failed or abandoned loads retain it.
+    if (resumeId && loadingState === 'loaded') clearResumeWizardCompletion(resumeId);
+  }, [resumeId, loadingState]);
 
   // Fetch job description when we have a tailored resume
   useEffect(() => {

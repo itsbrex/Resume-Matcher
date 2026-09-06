@@ -2,6 +2,13 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act, cleanup } from '@testing-library/react';
 import React from 'react';
 import type { ResumeData } from '@/components/dashboard/resume-component';
+import {
+  readResumeWizardCompletion,
+  readResumeWizardDraft,
+  writeResumeWizardCompletion,
+  writeResumeWizardDraft,
+} from '@/lib/utils/resume-wizard-storage';
+import { createInitialResumeWizardState } from '@/lib/api/resume-wizard';
 
 const fetchResume = vi.fn();
 const updateResume = vi.fn();
@@ -33,6 +40,10 @@ vi.mock('@/lib/i18n', () => {
   const t = (key: string) => key;
   return { useTranslations: () => ({ t }) };
 });
+
+vi.mock('@/lib/context/status-cache', () => ({
+  useStatusCache: () => ({ incrementResumes: vi.fn(), setHasMasterResume: vi.fn() }),
+}));
 
 vi.mock('@/lib/context/language-context', () => ({
   useLanguage: () => ({ uiLanguage: 'en', contentLanguage: 'en' }),
@@ -103,6 +114,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.resetModules();
 });
 
@@ -413,4 +425,127 @@ it('does not claim a restored backup if its source disappeared and the scoped wr
   );
   expect(screen.queryByText('builder.autoSave.localDraft')).not.toBeInTheDocument();
   expect(screen.getByTestId('summary')).toHaveTextContent('RECOVERED');
+});
+
+describe('builder acknowledgement of wizard completion', () => {
+  it.each(['processed', 'raw JSON'])(
+    'retires the matching receipt only after a validated %s baseline loads, enabling a fresh wizard',
+    async (kind) => {
+      writeResumeWizardCompletion('res-1');
+      const pending = deferred<unknown>();
+      fetchResume.mockReturnValue(pending.promise);
+      const Builder = await importBuilder();
+      const view = render(<Builder />);
+      await tick();
+      expect(readResumeWizardCompletion()).toBe('res-1');
+      expect(screen.getByTestId('name')).not.toHaveTextContent('Ada Lovelace');
+      await act(async () => {
+        pending.resolve(
+          kind === 'processed'
+            ? { processed_resume: REAL_RESUME }
+            : { processed_resume: null, raw_resume: { content: JSON.stringify(REAL_RESUME) } }
+        );
+      });
+      expect(screen.getByTestId('name')).toHaveTextContent('Ada Lovelace');
+      expect(readResumeWizardCompletion()).toBeNull();
+      view.unmount();
+      const { ResumeWizardPage } = await import('@/components/resume-wizard/resume-wizard-page');
+      render(<ResumeWizardPage />);
+      await tick();
+      expect(screen.getByRole('textbox')).toBeVisible();
+      expect(screen.queryByText('resumeWizard.created.title')).toBeNull();
+    }
+  );
+
+  it.each(['request failure', 'invalid processed shape', 'invalid raw JSON', 'processing'])(
+    'retains the receipt and wizard recovery after a %s',
+    async (kind) => {
+      writeResumeWizardCompletion('res-1');
+      if (kind === 'request failure') fetchResume.mockRejectedValue(new Error('offline'));
+      else
+        fetchResume.mockResolvedValue(
+          kind === 'invalid processed shape'
+            ? { processed_resume: {} }
+            : kind === 'invalid raw JSON'
+              ? { processed_resume: null, raw_resume: { content: '{}' } }
+              : { processed_resume: REAL_RESUME, raw_resume: { processing_status: 'processing' } }
+        );
+      const Builder = await importBuilder();
+      const view = render(<Builder />);
+      await tick();
+      expect(screen.getByRole('alert')).toHaveTextContent('builder.alerts.loadFailed');
+      expect(readResumeWizardCompletion()).toBe('res-1');
+      view.unmount();
+      const { ResumeWizardPage } = await import('@/components/resume-wizard/resume-wizard-page');
+      render(<ResumeWizardPage />);
+      await tick();
+      expect(
+        screen.getByRole('button', { name: 'resumeWizard.actions.openCreated' })
+      ).toBeVisible();
+    }
+  );
+
+  it.each(['draft', 'receipt'] as const)(
+    'preserves a newer %s written while the matching resume load is pending',
+    async (kind) => {
+      writeResumeWizardCompletion('res-1');
+      const pending = deferred<unknown>();
+      fetchResume.mockReturnValue(pending.promise);
+      const Builder = await importBuilder();
+      render(<Builder />);
+      if (kind === 'draft') {
+        const state = createInitialResumeWizardState();
+        state.current_question.text = 'Newer wizard question';
+        writeResumeWizardDraft(state);
+      } else writeResumeWizardCompletion('res-2');
+      await act(async () => pending.resolve({ processed_resume: REAL_RESUME }));
+      expect(screen.getByTestId('name')).toHaveTextContent('Ada Lovelace');
+      if (kind === 'draft')
+        expect(readResumeWizardDraft()?.current_question.text).toBe('Newer wizard question');
+      else expect(readResumeWizardCompletion()).toBe('res-2');
+    }
+  );
+
+  it('preserves an unrelated receipt when another resume loads', async () => {
+    writeResumeWizardCompletion('res-2');
+    fetchResume.mockResolvedValue({ processed_resume: REAL_RESUME });
+    const Builder = await importBuilder();
+    render(<Builder />);
+    await tick();
+    expect(screen.getByTestId('name')).toHaveTextContent('Ada Lovelace');
+    expect(readResumeWizardCompletion()).toBe('res-2');
+  });
+
+  it('preserves the receipt if the builder unmounts before its baseline arrives', async () => {
+    writeResumeWizardCompletion('res-1');
+    const pending = deferred<unknown>();
+    fetchResume.mockReturnValue(pending.promise);
+    const Builder = await importBuilder();
+    const view = render(<Builder />);
+    view.unmount();
+    await act(async () => pending.resolve({ processed_resume: REAL_RESUME }));
+    expect(readResumeWizardCompletion()).toBe('res-1');
+  });
+
+  it('can retire the receipt on a later loaded visit after storage recovers', async () => {
+    writeResumeWizardCompletion('res-1');
+    fetchResume.mockResolvedValue({ processed_resume: REAL_RESUME });
+    const originalRemove = Storage.prototype.removeItem;
+    const remove = vi.spyOn(Storage.prototype, 'removeItem');
+    remove.mockImplementation(function (this: Storage, key: string) {
+      if (key === 'resume_wizard_draft') throw new Error('Storage unavailable');
+      originalRemove.call(this, key);
+    });
+    const Builder = await importBuilder();
+    const first = render(<Builder />);
+    await tick();
+    expect(screen.getByTestId('name')).toHaveTextContent('Ada Lovelace');
+    expect(readResumeWizardCompletion()).toBe('res-1');
+    first.unmount();
+    remove.mockRestore();
+    render(<Builder />);
+    await tick();
+    expect(screen.getByTestId('name')).toHaveTextContent('Ada Lovelace');
+    expect(readResumeWizardCompletion()).toBeNull();
+  });
 });

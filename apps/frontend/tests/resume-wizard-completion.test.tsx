@@ -88,7 +88,7 @@ describe('wizard completion receipt retirement', () => {
     vi.unstubAllGlobals();
   });
 
-  it('starts a fresh wizard on remount after opening the acknowledged resume', async () => {
+  it('retains recovery when scheduled navigation never mounts the destination', async () => {
     const view = render(<ResumeWizardPage />);
     fireEvent.click(
       await screen.findByRole('button', { name: 'resumeWizard.actions.openCreated' })
@@ -96,8 +96,11 @@ describe('wizard completion receipt retirement', () => {
     expect(api.push).toHaveBeenCalledWith('/builder?id=master');
     view.unmount();
     render(<ResumeWizardPage />);
-    expect(await screen.findByRole('textbox')).toBeInTheDocument();
-    expect(screen.queryByText('resumeWizard.created.title')).toBeNull();
+    expect(
+      await screen.findByRole('button', { name: 'resumeWizard.actions.openCreated' })
+    ).toBeVisible();
+    expect(readResumeWizardCompletion()).toBe('master');
+    expect(screen.queryByRole('button', { name: 'resumeWizard.actions.create' })).toBeNull();
   });
 
   it('retains the receipt and recovery screen when navigation fails', async () => {
@@ -119,24 +122,23 @@ describe('wizard completion receipt retirement', () => {
     expect(readResumeWizardCompletion()).toBe('master');
   });
 
-  it('can retire the receipt on a later opening after storage recovers', async () => {
-    vi.spyOn(Storage.prototype, 'removeItem').mockImplementationOnce(() => {
-      throw new Error('Storage unavailable');
-    });
+  it('keeps the receipt across repeated scheduled openings without a loaded destination', async () => {
     const first = render(<ResumeWizardPage />);
     fireEvent.click(
       await screen.findByRole('button', { name: 'resumeWizard.actions.openCreated' })
     );
-    expect(readResumeWizardCompletion()).toBe('master');
-    expect(screen.queryByRole('alert')).toBeNull();
     first.unmount();
     const second = render(<ResumeWizardPage />);
     fireEvent.click(
       await screen.findByRole('button', { name: 'resumeWizard.actions.openCreated' })
     );
+    expect(api.push).toHaveBeenCalledTimes(2);
     second.unmount();
     render(<ResumeWizardPage />);
-    expect(await screen.findByRole('textbox')).toBeVisible();
+    expect(
+      await screen.findByRole('button', { name: 'resumeWizard.actions.openCreated' })
+    ).toBeVisible();
+    expect(readResumeWizardCompletion()).toBe('master');
   });
 
   it.each(['draft', 'receipt'] as const)(

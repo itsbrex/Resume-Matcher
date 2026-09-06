@@ -502,7 +502,7 @@ describe('ResumeWizardPage', () => {
     );
     expect(push).toHaveBeenCalledWith('/dashboard');
   });
-  it('retires the recovery receipt after the initial builder navigation succeeds', async () => {
+  it('retains recovery until the initially scheduled builder navigation actually loads', async () => {
     localStorage.setItem(
       'resume_wizard_draft',
       JSON.stringify(makeState({ step: 'review', resume_data: { personalInfo: { name: 'Ada' } } }))
@@ -523,7 +523,9 @@ describe('ResumeWizardPage', () => {
     await waitFor(() => expect(push).toHaveBeenCalledWith('/builder?id=saved-resume'));
     view.unmount();
     render(<ResumeWizardPage />);
-    expect(await screen.findByRole('textbox')).toBeVisible();
+    expect(
+      await screen.findByRole('button', { name: 'resumeWizard.actions.openCreated' })
+    ).toBeVisible();
     expect(mockedFinalize).toHaveBeenCalledTimes(1);
   });
 

@@ -17,6 +17,8 @@ Generic, reusable guides (Swiss design system, Next.js performance) live in [`..
 
 ### Architecture
 
+See the [hosted review corrections](architecture/hosted-review-corrections.md) for the verified PR stack, per-comment outcomes and full file inventory.
+
 | Doc                                                              | Purpose                                                         |
 | ---------------------------------------------------------------- | --------------------------------------------------------------- |
 | [backend-architecture](architecture/backend-architecture.md)     | Backend modules, API, services                                  |

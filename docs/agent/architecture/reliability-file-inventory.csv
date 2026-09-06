@@ -122,6 +122,7 @@ apps/backend/tests/integration/test_config_api.py,Backend verification,#932;#972
 apps/backend/tests/integration/test_config_durability.py,Backend verification,#932;#972
 apps/backend/tests/integration/test_confirmation_transactions.py,Backend verification,#940;#941;#947;#948;#949;#950;#951;#959;#963;#970;#971;#973;#974
 apps/backend/tests/integration/test_direct_improve_transactions.py,Backend verification,#973;#974
+apps/backend/tests/integration/test_enrichment_busy_writes.py,Backend verification,#955;#956;#957;#958;#973;#974
 apps/backend/tests/integration/test_health_api.py,Backend verification,
 apps/backend/tests/integration/test_jobs_api.py,Backend verification,#955;#956;#957;#958
 apps/backend/tests/integration/test_llm_contract.py,Backend verification,

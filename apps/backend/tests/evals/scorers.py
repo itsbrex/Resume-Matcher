@@ -30,6 +30,9 @@ from pydantic import ValidationError
 from app.schemas import ResumeData
 from app.services.parser import has_meaningful_resume_content
 
+_CJK_CHAR_CLASS = r"[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]"
+_CJK_RE = re.compile(_CJK_CHAR_CLASS)
+
 # Top-level resume sections whose presence we care about. ``workExperience``
 # and ``education`` are the load-bearing ones a tailoring must never drop.
 _TRACKED_SECTIONS: tuple[str, ...] = (
@@ -170,15 +173,27 @@ def jd_keywords_present(tailored: dict, keywords: list[str]) -> float:
     if not keywords:
         return 1.0
     haystack = flatten_resume_text(tailored)
+
+    def keyword_present(keyword: str) -> bool:
+        normalized = keyword.strip().lower()
+        if not normalized:
+            return False
+        if _CJK_RE.search(normalized):
+            return normalized in haystack
+        escaped = re.escape(normalized)
+        return bool(
+            re.search(
+                rf"(?:(?<!\w)|(?<={_CJK_CHAR_CLASS}))"
+                rf"{escaped}"
+                rf"(?:(?!\w)|(?={_CJK_CHAR_CLASS}))",
+                haystack,
+            )
+        )
+
     hits = sum(
         1
         for kw in keywords
-        if kw.strip()
-        and (
-            kw.strip().lower() in haystack
-            if re.search(r"[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]", kw)
-            else re.search(rf"(?<!\w){re.escape(kw.strip().lower())}(?!\w)", haystack)
-        )
+        if keyword_present(kw)
     )
     return hits / len(keywords)
 

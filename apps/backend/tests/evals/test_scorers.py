@@ -119,6 +119,13 @@ class TestJdKeywordsPresent:
     def test_empty_keyword_list_scores_one(self, sample_resume):
         assert jd_keywords_present(sample_resume, []) == 1.0
 
+    def test_latin_keywords_adjacent_to_cjk_keep_term_boundaries(self) -> None:
+        mixed_script = {"summary": "Pythonによる開発、熟悉Java开发"}
+        javascript_only = {"summary": "负责JavaScript平台开发"}
+
+        assert jd_keywords_present(mixed_script, ["Python", "Java"]) == 1.0
+        assert jd_keywords_present(javascript_only, ["Java", "JavaScript"]) == 0.5
+
     def test_searches_nested_fields(self, sample_resume):
         # "microservices" only appears inside a work-experience bullet.
         assert jd_keywords_present(sample_resume, ["microservices"]) == 1.0

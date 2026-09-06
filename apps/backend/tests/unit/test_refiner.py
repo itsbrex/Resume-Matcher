@@ -19,9 +19,16 @@ from app.schemas.refinement import AlignmentViolation, RefinementConfig
 
 
 def test_retained_keywords_use_cjk_substrings_and_latin_term_boundaries() -> None:
-    resume = {"summary": "负责数据分析与 JavaScript 平台开发"}
+    resume = {
+        "summary": "负责数据分析与Pythonによる開発，熟悉Java开发与JavaScript平台"
+    }
 
-    assert count_retained_keywords(["数据", "Java", "JavaScript"], resume) == 2
+    assert count_retained_keywords(
+        ["数据", "Python", "Java", "JavaScript"], resume
+    ) == 4
+    assert count_retained_keywords(
+        ["Java", "JavaScript"], {"summary": "负责JavaScript平台开发"}
+    ) == 1
 
 
 async def test_refinement_stats_count_retained_cjk_keyword(
@@ -47,6 +54,34 @@ async def test_refinement_stats_count_retained_cjk_keyword(
     )
 
     assert result.keywords_applied == ["数据"]
+    assert result.to_stats().keywords_injected == 1
+    assert result.final_match_percentage == 100.0
+    complete.assert_awaited_once()
+
+
+async def test_refinement_stats_count_latin_keyword_adjacent_to_cjk(
+    sample_resume: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    initial = copy.deepcopy(sample_resume)
+    master = copy.deepcopy(initial)
+    master["summary"] = "熟悉Java开发"
+    injected = copy.deepcopy(initial)
+    injected["summary"] = "熟悉Java开发"
+    complete = AsyncMock(return_value=injected)
+    monkeypatch.setattr("app.services.refiner.complete_json", complete)
+
+    result = await refine_resume(
+        initial_tailored=initial,
+        master_resume=master,
+        job_description="需要熟悉Java开发",
+        job_keywords={"required_skills": ["Java"]},
+        config=RefinementConfig(
+            enable_ai_phrase_removal=False,
+            enable_master_alignment_check=False,
+        ),
+    )
+
+    assert result.keywords_applied == ["Java"]
     assert result.to_stats().keywords_injected == 1
     assert result.final_match_percentage == 100.0
     complete.assert_awaited_once()

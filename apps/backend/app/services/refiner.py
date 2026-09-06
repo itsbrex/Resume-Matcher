@@ -36,15 +36,17 @@ logger = logging.getLogger(__name__)
 # LLM-012: Job description truncation limits
 MAX_JD_LENGTH = 2000
 MIN_TRUNCATION_WARNING_LENGTH = 1500
-_CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]")
+_CJK_CHAR_CLASS = r"[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]"
+_CJK_RE = re.compile(_CJK_CHAR_CLASS)
 
 
 def _keyword_in_text(keyword: str, text: str) -> bool:
-    """Check for a CJK substring or a non-CJK whole term in text.
+    """Check for a CJK substring or a bounded non-CJK term in text.
 
-    CJK scripts do not require whitespace between terms. Other scripts retain
-    boundaries so 'python' does not match 'pythonic' and 'go' does not match
-    'going'.
+    CJK scripts do not require whitespace between terms, so a CJK character is
+    also a boundary for an adjacent Latin term. Other word characters retain
+    boundaries so 'python' does not match 'pythonic' and 'java' does not match
+    'javascript'.
     """
     normalized_keyword = keyword.strip().lower()
     if not normalized_keyword:
@@ -53,7 +55,11 @@ def _keyword_in_text(keyword: str, text: str) -> bool:
     if _CJK_RE.search(normalized_keyword):
         return normalized_keyword in normalized_text
     escaped = re.escape(normalized_keyword)
-    pattern = rf"(?<!\w){escaped}(?!\w)"
+    pattern = (
+        rf"(?:(?<!\w)|(?<={_CJK_CHAR_CLASS}))"
+        rf"{escaped}"
+        rf"(?:(?!\w)|(?={_CJK_CHAR_CLASS}))"
+    )
     return bool(re.search(pattern, normalized_text))
 
 

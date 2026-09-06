@@ -5,6 +5,8 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 from types import SimpleNamespace
 
+import pytest
+
 from app.schemas.models import ResumeData
 from app.services.parser import restore_dates_from_markdown
 from app.services.refiner import refine_resume
@@ -395,6 +397,76 @@ def test_versions_years_and_equivalent_scaled_counts_are_not_novel_metrics() -> 
     assert "1 million" in finalized["workExperience"][0]["description"][0]
 
 
+@pytest.mark.parametrize(
+    ("source_row", "candidate_row"),
+    [
+        ("Migrated 150 servers", "Migrated 2000 servers"),
+        ("Managed systems in 150 stores", "Managed systems in 2000 stores"),
+    ],
+    ids=["plain-count", "count-after-preposition"],
+)
+def test_count_in_year_range_is_not_mistaken_for_a_date(
+    source_row: str,
+    candidate_row: str,
+) -> None:
+    source = _source_resume()
+    source["workExperience"][0]["description"][0] = source_row
+    candidate = copy.deepcopy(source)
+    candidate["workExperience"][0]["description"][0] = candidate_row
+
+    finalized = finalize_ai_resume(source, candidate)
+
+    assert finalized["workExperience"][0]["description"][0] == source_row
+
+
+@pytest.mark.parametrize(
+    ("source_row", "candidate_row"),
+    [
+        (
+            "Reduced deployment time",
+            "Reduced deployment time by automating release pipelines across EMEA",
+        ),
+        (
+            "Built auth for five services and integrated SSO",
+            "Built auth for services",
+        ),
+    ],
+    ids=["unsupported-expansion", "unsupported-truncation"],
+)
+def test_subset_rewrite_is_restored_or_flagged_for_review(
+    source_row: str,
+    candidate_row: str,
+) -> None:
+    source = _source_resume()
+    source["workExperience"][0]["description"] = [source_row]
+    source["workExperience"][0]["descriptionStyles"] = ["bullet"]
+    candidate = copy.deepcopy(source)
+    candidate["workExperience"][0]["description"] = [candidate_row]
+
+    strict = finalize_ai_resume(source, candidate, allow_review_claims=False)
+    preview = finalize_ai_resume(source, candidate, allow_review_claims=True)
+
+    assert strict["workExperience"][0]["description"] == [source_row]
+    assert grounding_review_warnings(source, preview) == [
+        f"{GROUNDING_REVIEW_CODE}: Review workExperience[0].description[0] against the source resume."
+    ]
+
+
+def test_moderate_grounded_expansion_remains_editable_without_warning() -> None:
+    source = _source_resume()
+    source["workExperience"][0]["description"] = ["Built Python APIs"]
+    source["workExperience"][0]["descriptionStyles"] = ["bullet"]
+    candidate = copy.deepcopy(source)
+    candidate["workExperience"][0]["description"] = ["Built scalable Python APIs"]
+
+    finalized = finalize_ai_resume(source, candidate, allow_review_claims=False)
+
+    assert finalized["workExperience"][0]["description"] == [
+        "Built scalable Python APIs"
+    ]
+    assert grounding_review_warnings(source, finalized) == []
+
+
 def test_restorable_reordered_metric_consumes_its_matched_source_row() -> None:
     source = _source_resume()
     source["workExperience"][0]["description"] = [
@@ -446,6 +518,23 @@ def test_verified_append_can_survive_finalization() -> None:
     assert finalized["workExperience"][0]["description"][-1] == (
         "Added a grounded verified improvement"
     )
+
+
+def test_ungrounded_preview_append_receives_review_warning() -> None:
+    source = _source_resume()
+    candidate = copy.deepcopy(source)
+    candidate["workExperience"][0]["description"].append(
+        "Spearheaded an industry consortium on resume parsing"
+    )
+
+    finalized = finalize_ai_resume(source, candidate, allow_appended_rows=True)
+
+    assert finalized["workExperience"][0]["description"][-1] == (
+        "Spearheaded an industry consortium on resume parsing"
+    )
+    assert grounding_review_warnings(source, finalized) == [
+        f"{GROUNDING_REVIEW_CODE}: Review workExperience[0].description[2] against the source resume."
+    ]
 
 
 def test_direct_flow_drops_unreviewed_ungrounded_append() -> None:
@@ -513,6 +602,27 @@ def test_duplicate_entry_identity_uses_description_to_keep_both_rewrites() -> No
 
     assert len(finalized["workExperience"]) == 3
     assert {entry["id"] for entry in finalized["workExperience"]} == {1, 2, 3}
+
+
+def test_confirm_accepts_reordered_entries_with_duplicate_field_identity() -> None:
+    source = _source_resume()
+    first = source["workExperience"][0]
+    first.pop("id")
+    duplicate = copy.deepcopy(first)
+    duplicate["years"] = "Apr 2021 - Dec 2023"
+    duplicate["description"] = ["Maintained data pipelines"]
+    duplicate["descriptionStyles"] = ["plain"]
+    source["workExperience"] = [first, duplicate]
+    candidate = copy.deepcopy(source)
+    candidate["workExperience"].reverse()
+
+    finalized = finalize_ai_resume(source, candidate)
+
+    assert [entry["years"] for entry in finalized["workExperience"]] == [
+        "Apr 2021 - Dec 2023",
+        "Jan 2020 - Mar 2021",
+    ]
+    assert validate_confirmed_resume(source, finalized) == []
 
 
 async def test_refiner_rolls_back_malformed_nested_writer_output() -> None:

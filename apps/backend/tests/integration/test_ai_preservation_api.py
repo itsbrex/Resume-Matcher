@@ -240,6 +240,55 @@ async def test_schema_round_trip_preview_preserves_rows_styles_and_list_multipli
     assert stored["processed_data"] == preview_resume
 
 
+async def test_duplicate_identity_reorder_preview_confirms_without_false_drift(
+    isolated_db: Any, sample_resume: dict[str, Any]
+) -> None:
+    source = ResumeData.model_validate(copy.deepcopy(sample_resume)).model_dump()
+    first = source["workExperience"][0]
+    first["id"] = 0
+    first["title"] = "Software Engineer"
+    first["company"] = "Acme"
+    first["years"] = "2019 - 2020"
+    first["description"] = ["Built Python APIs"]
+    first["descriptionStyles"] = ["bullet"]
+    second = copy.deepcopy(first)
+    second["years"] = "2021 - 2023"
+    second["description"] = ["Maintained data pipelines"]
+    source["workExperience"] = [first, second]
+    candidate = copy.deepcopy(source)
+    candidate["workExperience"].reverse()
+    resume_id, job_id = await _seed(isolated_db, source)
+
+    with ExitStack() as stack:
+        for pipeline_patch in _pipeline_patches(
+            source, _refinement_result(candidate)
+        ):
+            stack.enter_context(pipeline_patch)
+        async with _client() as client:
+            preview = await client.post(
+                "/api/v1/resumes/improve/preview",
+                json={"resume_id": resume_id, "job_id": job_id},
+            )
+            assert preview.status_code == 200, preview.text
+            preview_data = preview.json()["data"]
+            assert [
+                entry["years"]
+                for entry in preview_data["resume_preview"]["workExperience"]
+            ] == ["2021 - 2023", "2019 - 2020"]
+
+            confirm = await client.post(
+                "/api/v1/resumes/improve/confirm",
+                json={
+                    "resume_id": resume_id,
+                    "job_id": job_id,
+                    "improved_data": preview_data["resume_preview"],
+                    "improvements": preview_data["improvements"],
+                },
+            )
+
+    assert confirm.status_code == 200, confirm.text
+
+
 async def test_nested_preview_and_confirm_failures_return_only_safe_warning_codes(
     isolated_db: Any, sample_resume: dict[str, Any]
 ) -> None:

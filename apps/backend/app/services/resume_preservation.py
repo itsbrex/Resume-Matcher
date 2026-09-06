@@ -133,10 +133,36 @@ def _similarity(left: str, right: str) -> float:
     left_tokens = _tokens(left_normalized)
     right_tokens = _tokens(right_normalized)
     overlap = len(left_tokens & right_tokens) / max(
-        1, min(len(left_tokens), len(right_tokens))
+        1, max(len(left_tokens), len(right_tokens))
     )
     sequence = SequenceMatcher(None, left_normalized, right_normalized).ratio()
+    if left_tokens < right_tokens or right_tokens < left_tokens:
+        # Character similarity must not hide a material expansion or truncation
+        # when every token on the shorter side happens to match.
+        return overlap * sequence
     return max(overlap, sequence)
+
+
+def _is_date_like_number(text: str, match: re.Match[str]) -> bool:
+    """Return whether a bare four-digit number appears in date context."""
+    prefix = text[max(0, match.start() - 24) : match.start()].casefold()
+    suffix = text[match.end() : min(len(text), match.end() + 16)].casefold()
+    month = (
+        r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+        r"jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|"
+        r"dec(?:ember)?)"
+    )
+    return bool(
+        re.search(rf"\b{month}\s*$", prefix)
+        or (
+            re.search(
+                r"\b(?:in|since|during|from|until|through|between)\s*$", prefix
+            )
+            and re.match(r"^\s*(?:$|[,.;:)])", suffix)
+        )
+        or re.search(r"\b\d{4}\s*[-–—/]\s*$", prefix)
+        or re.match(r"^\s*[-–—/]\s*(?:\d{4}|present|current)\b", suffix)
+    )
 
 
 def _novel_numbers(source: str, candidate: str) -> bool:
@@ -153,7 +179,7 @@ def _novel_numbers(source: str, candidate: str) -> bool:
                     integer = int(raw_number)
                 except ValueError:
                     integer = 0
-                if 1900 <= integer <= 2100:
+                if 1900 <= integer <= 2100 and _is_date_like_number(text, match):
                     continue
             try:
                 value = Decimal(raw_number)
@@ -531,6 +557,38 @@ def _entry_map(
     return result
 
 
+def _entry_bucket_violation(
+    source_entries: list[dict[str, Any]],
+    candidate_entries: list[dict[str, Any]],
+    section: str,
+    *,
+    allow_appended_rows: bool,
+) -> str | None:
+    """Validate one identity bucket using the finalizer's content matching."""
+    available = set(range(len(source_entries)))
+    for candidate_entry in candidate_entries:
+        source_index = _matching_source_index(
+            candidate_entry, source_entries, available, section
+        )
+        if source_index is None:
+            return "identity"
+        available.remove(source_index)
+        source_entry = source_entries[source_index]
+        if any(
+            field in source_entry
+            and source_entry.get(field) != candidate_entry.get(field)
+            for field in _PROTECTED_FIELDS[section]
+        ):
+            return "identity"
+        if not _description_contract_preserved(
+            source_entry,
+            candidate_entry,
+            allow_appended_rows=allow_appended_rows,
+        ):
+            return "descriptions"
+    return None
+
+
 def validate_confirmed_resume(
     source: dict[str, Any],
     candidate: dict[str, Any],
@@ -556,19 +614,14 @@ def validate_confirmed_resume(
             continue
         for key, source_entries in source_map.items():
             candidate_entries = candidate_map[key]
-            for source_entry, candidate_entry in zip(source_entries, candidate_entries):
-                if any(
-                    field in source_entry
-                    and source_entry.get(field) != candidate_entry.get(field)
-                    for field in _PROTECTED_FIELDS[section]
-                ):
-                    violations.append(f"{section}.identity")
-                    break
-                if not _description_contract_preserved(
-                    source_entry, candidate_entry, allow_appended_rows=allow_appended_rows
-                ):
-                    violations.append(f"{section}.descriptions")
-                    break
+            violation = _entry_bucket_violation(
+                source_entries,
+                candidate_entries,
+                section,
+                allow_appended_rows=allow_appended_rows,
+            )
+            if violation is not None:
+                violations.append(f"{section}.{violation}")
 
     source_custom = source.get("customSections")
     candidate_custom = candidate.get("customSections")
@@ -607,22 +660,14 @@ def validate_confirmed_resume(
                 violations.append(f"customSections.{key}.entries")
                 continue
             for identity, source_entries in source_map.items():
-                for source_entry, candidate_entry in zip(
-                    source_entries, candidate_map[identity]
-                ):
-                    if any(
-                        field in source_entry
-                        and source_entry.get(field) != candidate_entry.get(field)
-                        for field in _PROTECTED_FIELDS["customItems"]
-                    ):
-                        violations.append(f"customSections.{key}.identity")
-                        break
-                    if not _description_contract_preserved(
-                        source_entry, candidate_entry,
-                        allow_appended_rows=allow_appended_rows,
-                    ):
-                        violations.append(f"customSections.{key}.descriptions")
-                        break
+                violation = _entry_bucket_violation(
+                    source_entries,
+                    candidate_map[identity],
+                    "customItems",
+                    allow_appended_rows=allow_appended_rows,
+                )
+                if violation is not None:
+                    violations.append(f"customSections.{key}.{violation}")
 
     source_additional = source.get("additional")
     candidate_additional = candidate.get("additional")
@@ -725,13 +770,24 @@ def _entry_grounding_warnings(
             available_rows.remove(source_index)
             row_assignments[row_index] = (source_index, score)
         for row_index, row in enumerate(candidate_description):
-            if not isinstance(row, str) or row_index not in row_assignments:
+            if not isinstance(row, str):
                 continue
-            source_index, score = row_assignments[row_index]
-            if (
-                _normalized(row) != _normalized(source_description[source_index])
-                and score < _GROUNDING_REVIEW_THRESHOLD
-            ):
+            assignment = row_assignments.get(row_index)
+            if assignment is None:
+                match = _best_source_row(
+                    row, source_description, set(range(len(source_description)))
+                )
+                if _normalized(row) and (
+                    match is None or match[1] < _GROUNDING_REVIEW_THRESHOLD
+                ):
+                    warnings.append(
+                        _grounding_warning(f"{description_path}[{row_index}]")
+                    )
+                continue
+            source_index, score = assignment
+            if _normalized(row) != _normalized(
+                source_description[source_index]
+            ) and score < _GROUNDING_REVIEW_THRESHOLD:
                 warnings.append(_grounding_warning(f"{description_path}[{row_index}]"))
     return warnings
 

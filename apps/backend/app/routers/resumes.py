@@ -101,6 +101,10 @@ from app.prompts import DEFAULT_IMPROVE_PROMPT_ID, IMPROVE_PROMPT_OPTIONS
 
 logger = logging.getLogger(__name__)
 _PROCESSING_CLEANUP_TIMEOUT_SECONDS = 5.0
+_PROCESSING_RETIREMENT_MAX_ATTEMPTS = 3
+_PROCESSING_RETIREMENT_INITIAL_BACKOFF_SECONDS = 0.1
+_PROCESSING_RETIREMENT_MAX_BACKOFF_SECONDS = 0.5
+_PROCESSING_SHUTDOWN_GRACE_SECONDS = 1.0
 _PROCESSING_CLEANUP_TASKS: set[asyncio.Task[Any]] = set()
 REFINEMENT_FAILED_WARNING = "REFINEMENT_FAILED: Resume refinement was unavailable; the previous result was kept."
 DIFF_UNAVAILABLE_WARNING = "DIFF_UNAVAILABLE: Resume changes could not be calculated."
@@ -812,17 +816,53 @@ async def _await_processing_cleanup(task: asyncio.Task[Any]) -> Any:
 async def _retire_processing_attempt(
     resume_id: str, processing_token: str | None
 ) -> None:
-    """Keep retrying contention until this attempt is retired or superseded."""
-    while True:
+    """Retire an attempt after bounded contention retries."""
+    retry_delay = _PROCESSING_RETIREMENT_INITIAL_BACKOFF_SECONDS
+    for attempt in range(1, _PROCESSING_RETIREMENT_MAX_ATTEMPTS + 1):
         try:
             await db.finish_resume_processing(
                 resume_id, processing_token, processing_status="failed"
             )
             return
         except DatabaseBusyError:
+            if attempt == _PROCESSING_RETIREMENT_MAX_ATTEMPTS:
+                logger.error(
+                    "Processing retirement exhausted %d attempts for resume %s; "
+                    "the processing row remains retryable",
+                    attempt,
+                    resume_id,
+                )
+                raise
             # Each failed reservation closes its session. Back off without
             # holding a transaction; the tracked task still owns retirement.
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(retry_delay)
+            retry_delay = min(
+                retry_delay * 2,
+                _PROCESSING_RETIREMENT_MAX_BACKOFF_SECONDS,
+            )
+
+
+async def drain_processing_cleanup_tasks() -> None:
+    """Settle tracked processing cleanup before the database is disposed."""
+    cleanup_tasks = set(_PROCESSING_CLEANUP_TASKS)
+    if not cleanup_tasks:
+        return
+
+    _, pending = await asyncio.wait(
+        cleanup_tasks,
+        timeout=_PROCESSING_SHUTDOWN_GRACE_SECONDS,
+    )
+    if pending:
+        logger.warning(
+            "Cancelling %d processing cleanup task(s) during shutdown",
+            len(pending),
+        )
+        for task in pending:
+            task.cancel()
+
+    # Do not wrap this gather in wait_for: an in-flight SQLite operation must
+    # finish unwinding and release its connection before db.close() runs.
+    await asyncio.gather(*cleanup_tasks, return_exceptions=True)
 
 
 async def _finish_cancelled_processing(

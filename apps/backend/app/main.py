@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import sys
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -29,6 +30,7 @@ from app.routers import (
     resume_wizard_router,
     resumes_router,
 )
+from app.routers.resumes import drain_processing_cleanup_tasks
 
 
 def _configure_application_logging() -> None:
@@ -41,7 +43,7 @@ _configure_application_logging()
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan manager."""
     # Startup
     settings.data_dir.mkdir(parents=True, exist_ok=True)
@@ -61,6 +63,11 @@ async def lifespan(app: FastAPI):
     # await init_pdf_renderer()
     yield
     # Shutdown - wrap each cleanup in try-except to ensure all resources are released
+    try:
+        await drain_processing_cleanup_tasks()
+    except Exception:
+        logger.exception("Error draining processing cleanup")
+
     try:
         await close_pdf_renderer()
     except Exception as e:

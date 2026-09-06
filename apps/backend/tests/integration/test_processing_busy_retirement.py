@@ -1,12 +1,14 @@
 """Busy processing completion must retain cleanup ownership after HTTP return."""
 
 import asyncio
+import logging
 from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text, update
 
+from app import main as main_module
 from app.database import Database
 from app.main import app
 from app.models import Resume
@@ -27,6 +29,145 @@ async def test_unclaimed_upload_cannot_be_published_ready(
         )
     stored = await fast_busy_database.get_resume(row["resume_id"])
     assert stored is not None and stored["processing_status"] == "processing"
+
+
+async def test_sustained_contention_exhausts_retirement_and_allows_later_retry(
+    fast_busy_database: Database,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    sample_resume: dict[str, Any],
+) -> None:
+    """A permanent writer lock cannot retain a background task indefinitely."""
+    database = fast_busy_database
+    row = await database.create_resume(
+        content="Synthetic resume", processing_status="failed"
+    )
+    token = await database.claim_resume_processing(row["resume_id"])
+    assert token is not None
+    writer = database._session()
+    await writer.__aenter__()
+    await writer.execute(text("BEGIN IMMEDIATE"))
+    monkeypatch.setattr(resumes, "_PROCESSING_CLEANUP_TIMEOUT_SECONDS", 0.005)
+    monkeypatch.setattr(
+        resumes, "_PROCESSING_RETIREMENT_MAX_ATTEMPTS", 2, raising=False
+    )
+    monkeypatch.setattr(
+        resumes, "_PROCESSING_RETIREMENT_INITIAL_BACKOFF_SECONDS", 0.001,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        resumes, "_PROCESSING_RETIREMENT_MAX_BACKOFF_SECONDS", 0.001,
+        raising=False,
+    )
+    caplog.set_level(logging.ERROR, logger=resumes.__name__)
+
+    background: list[asyncio.Task[Any]] = []
+    try:
+        await resumes._finish_cancelled_processing(row["resume_id"], token)
+        background = list(resumes._PROCESSING_CLEANUP_TASKS)
+        assert background
+        done, pending = await asyncio.wait(background, timeout=0.25)
+        assert not pending, "sustained contention kept retirement alive indefinitely"
+        assert all(isinstance(task.exception(), Exception) for task in done)
+        assert "exhausted 2 attempts" in caplog.text
+    finally:
+        for task in background:
+            if not task.done():
+                task.cancel()
+        if background:
+            await asyncio.gather(*background, return_exceptions=True)
+        await writer.rollback()
+        await writer.__aexit__(None, None, None)
+
+    stored = await database.get_resume(row["resume_id"])
+    assert stored is not None and stored["processing_status"] == "processing"
+
+    async def parse_after_lock_release(content: str) -> dict[str, Any]:
+        assert content == "Synthetic resume"
+        return sample_resume
+
+    monkeypatch.setattr(resumes, "parse_resume_to_json", parse_after_lock_release)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        retried = await client.post(
+            f"/api/v1/resumes/{row['resume_id']}/retry-processing"
+        )
+    assert retried.status_code == 200, retried.text
+    stored = await database.get_resume(row["resume_id"])
+    assert stored is not None and stored["processing_status"] == "ready"
+    assert stored["processed_data"] == sample_resume
+
+
+async def test_lifespan_reaps_contended_retirement_before_database_close(
+    fast_busy_database: Database,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Shutdown cancels and settles an owned SQLite attempt before disposal."""
+    database = fast_busy_database
+    monkeypatch.setattr(resumes, "_PROCESSING_CLEANUP_TIMEOUT_SECONDS", 0.005)
+    monkeypatch.setattr(
+        resumes, "_PROCESSING_RETIREMENT_MAX_ATTEMPTS", 100, raising=False
+    )
+    monkeypatch.setattr(
+        resumes, "_PROCESSING_RETIREMENT_INITIAL_BACKOFF_SECONDS", 1.0,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        resumes, "_PROCESSING_RETIREMENT_MAX_BACKOFF_SECONDS", 1.0,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        resumes, "_PROCESSING_SHUTDOWN_GRACE_SECONDS", 0.001, raising=False
+    )
+    original_close = database.close
+    original_finish = database.finish_resume_processing
+    background: list[asyncio.Task[Any]] = []
+    close_observations: list[bool] = []
+    attempt_started, attempt_settled = asyncio.Event(), asyncio.Event()
+
+    async def observed_finish(*args: Any, **kwargs: Any) -> Any:
+        attempt_started.set()
+        try:
+            return await original_finish(*args, **kwargs)
+        finally:
+            attempt_settled.set()
+
+    async def observed_close() -> None:
+        close_observations.append(
+            attempt_settled.is_set()
+            and all(task.done() for task in background)
+        )
+        await original_close()
+
+    monkeypatch.setattr(database, "finish_resume_processing", observed_finish)
+    monkeypatch.setattr(main_module.db, "close", observed_close)
+    writer = database._session()
+    try:
+        async with app.router.lifespan_context(app):
+            row = await database.create_resume(
+                content="Synthetic resume", processing_status="failed"
+            )
+            token = await database.claim_resume_processing(row["resume_id"])
+            assert token is not None
+            await writer.__aenter__()
+            await writer.execute(text("BEGIN IMMEDIATE"))
+            await resumes._finish_cancelled_processing(row["resume_id"], token)
+            await attempt_started.wait()
+            assert not attempt_settled.is_set()
+            background = list(resumes._PROCESSING_CLEANUP_TASKS)
+            assert background and any(not task.done() for task in background)
+    finally:
+        for task in background:
+            if not task.done():
+                task.cancel()
+        if background:
+            await asyncio.gather(*background, return_exceptions=True)
+        await writer.rollback()
+        await writer.__aexit__(None, None, None)
+
+    assert close_observations == [True]
+    assert not resumes._PROCESSING_CLEANUP_TASKS
 
 
 @pytest.mark.parametrize("superseded", [False, True])

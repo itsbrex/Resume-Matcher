@@ -757,9 +757,11 @@ class _PolicyRouter(Router):
         try:
             return await super().make_call(original_function, *args, **kwargs)
         except litellm.InternalServerError as error:
-            # async_function_with_retries honors an exception-local override
-            # before its incomplete policy dispatcher. The attribute is part
-            # of Router's own deployment-specific retry mechanism.
+            # Verified against pinned LiteLLM 1.86.2: the outer
+            # async_function_with_retries awaits self.make_call(), then reads
+            # e.num_retries in its except block before consulting retry policy.
+            # Base make_call performs one provider invocation, not the retry
+            # loop, so this override is observed before another attempt.
             error.num_retries = 2
             raise
 

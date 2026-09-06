@@ -100,6 +100,8 @@ from app.services.interview_prep import generate_interview_prep
 from app.prompts import DEFAULT_IMPROVE_PROMPT_ID, IMPROVE_PROMPT_OPTIONS
 
 logger = logging.getLogger(__name__)
+_PROCESSING_CLEANUP_TIMEOUT_SECONDS = 5.0
+_PROCESSING_CLEANUP_TASKS: set[asyncio.Task[Any]] = set()
 REFINEMENT_FAILED_WARNING = "REFINEMENT_FAILED: Resume refinement was unavailable; the previous result was kept."
 DIFF_UNAVAILABLE_WARNING = "DIFF_UNAVAILABLE: Resume changes could not be calculated."
 
@@ -779,19 +781,36 @@ def _require_processing_commit(
 
 
 async def _await_processing_cleanup(task: asyncio.Task[Any]) -> Any:
-    """Drain an owned database action despite repeated caller cancellation."""
+    """Bound caller waiting while a tracked task retains database ownership."""
+    _PROCESSING_CLEANUP_TASKS.add(task)
+
+    def finished(cleanup: asyncio.Task[Any]) -> None:
+        _PROCESSING_CLEANUP_TASKS.discard(cleanup)
+        if not cleanup.cancelled():
+            error = cleanup.exception()
+            if error is not None:
+                logger.error(
+                    "Owned processing cleanup failed",
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+
+    task.add_done_callback(finished)
+    deadline = asyncio.get_running_loop().time() + _PROCESSING_CLEANUP_TIMEOUT_SECONDS
     while not task.done():
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            raise TimeoutError("Processing cleanup continues in the background")
         try:
-            await asyncio.shield(task)
+            # Unlike wait_for, cancellation or timeout of this waiter never
+            # cancels the owned transaction/retirement task.
+            await asyncio.wait({task}, timeout=remaining)
         except asyncio.CancelledError:
             continue
-        except Exception:
-            break
     return task.result()
 
 
 async def _finish_cancelled_processing(resume_id: str, processing_token: str) -> None:
-    """Retire only this attempt, awaiting its cleanup even after cancellation."""
+    """Retire only this attempt, deferring a stalled cleanup after a bounded wait."""
     cleanup = asyncio.create_task(
         db.finish_resume_processing(
             resume_id, processing_token, processing_status="failed"
@@ -799,6 +818,8 @@ async def _finish_cancelled_processing(resume_id: str, processing_token: str) ->
     )
     try:
         await _await_processing_cleanup(cleanup)
+    except TimeoutError:
+        logger.warning("Processing retirement continues for resume %s", resume_id)
     except Exception:
         logger.exception("Failed to retire cancelled processing for %s", resume_id)
 
@@ -813,10 +834,18 @@ async def _claim_processing(
     try:
         return await asyncio.shield(claim)
     except asyncio.CancelledError:
-        try:
-            token = await _await_processing_cleanup(claim)
+        async def retire_claim() -> None:
+            token = await claim
             if token is not None:
-                await _finish_cancelled_processing(resume_id, token)
+                await db.finish_resume_processing(
+                    resume_id, token, processing_status="failed"
+                )
+
+        retirement = asyncio.create_task(retire_claim())
+        try:
+            await _await_processing_cleanup(retirement)
+        except TimeoutError:
+            logger.warning("Processing claim retirement continues for resume %s", resume_id)
         except Exception:
             logger.exception("Failed to settle cancelled processing claim for %s", resume_id)
         raise

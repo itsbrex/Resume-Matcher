@@ -598,3 +598,26 @@ async def test_keyword_writer_preserves_dedicated_operation_failures(
     monkeypatch.setattr(refiner, "complete_json", AsyncMock(side_effect=kind("synthetic boundary")))
     with pytest.raises(kind):
         await refiner.inject_keywords(sample_resume, ["Kubernetes"], sample_resume, "Python engineer")
+
+
+def test_preview_sized_resume_and_suggestions_remain_confirmable() -> None:
+    from app.ai_limits import validate_source_size
+    from app.schemas.models import ImproveResumeConfirmRequest, ResumeData
+
+    candidate = ResumeData(summary="x" * 198_000).model_dump(mode="json")
+    suggestions = [{"suggestion": "Valid suggestion " * 200, "lineNumber": None}]
+    validate_source_size(candidate)
+    validate_source_size(suggestions)
+    request = ImproveResumeConfirmRequest.model_validate({"resume_id": "r", "job_id": "j", "improved_data": candidate, "improvements": suggestions})
+    assert request.improved_data.summary == candidate["summary"]
+
+
+@pytest.mark.parametrize("field", ["improved_data", "improvements", "resume_id"])
+def test_confirm_still_rejects_each_oversized_source(field: str) -> None:
+    from app.schemas.models import ImproveResumeConfirmRequest
+
+    payload: dict[str, Any] = {"resume_id": "r", "job_id": "j", "improved_data": {}, "improvements": []}
+    oversized = "x" * 200_001
+    payload[field] = {"summary": oversized} if field == "improved_data" else [{"suggestion": oversized}] if field == "improvements" else oversized
+    with pytest.raises(ValidationError):
+        ImproveResumeConfirmRequest.model_validate(payload)

@@ -8,6 +8,8 @@
 
 Cancellation is cooperative. Synchronous validation or a noninterruptible converter thread cannot be forcibly stopped by an asyncio timer. Owned resource cleanup may finish after the work deadline; upload and PDF cleanup policies retain their capacity reservations until those resources have actually stopped. A cancelled upload/retry settles any in-flight processing claim and marks only its owned attempt failed. It cannot recreate a deleted row or retire a newer retry.
 
+Upload/retry waits at most five additional seconds for processing-claim retirement, including repeated caller cancellation. A stalled database action stays in a tracked background task, holding its transaction until it settles; a late claim's task also retires the returned token. The request can return while cleanup continues, and cleanup still cannot overwrite a newer attempt.
+
 ## Input policy
 
 Oversized input is rejected rather than silently truncated. Schema and stored-source failures return 422 before the relevant AI stage.
@@ -22,7 +24,8 @@ Oversized input is rejected rather than silently truncated. Schema and stored-so
 | Regeneration content entries | 100 per item |
 | Regeneration instruction | 2,000 characters |
 | Enhancement / regeneration request JSON | 200,000 serialized characters |
-| Resume source / confirmation request JSON | 200,000 serialized characters |
+| Resume source / confirmation improved resume | 200,000 serialized characters |
+| Confirmation suggestions and identifier envelope | 200,000 serialized characters, independently of the resume |
 | Job description | 100,000 characters |
 | Final LLM prompt plus system text | 512,000 characters |
 | Wizard history | 15 entries; each resume snapshot bounded to 200,000 serialized characters |

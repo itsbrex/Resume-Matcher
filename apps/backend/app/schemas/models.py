@@ -672,7 +672,10 @@ class ImproveResumeConfirmRequest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_source_budget(self) -> "ImproveResumeConfirmRequest":
-        validate_source_size(self.model_dump(mode="json"))
+        # A preview-sized resume remains confirmable when suggestions/IDs are
+        # added to its envelope. Each independently bounded source stays capped.
+        validate_source_size(self.improved_data.model_dump(mode="json"))
+        validate_source_size(self.model_dump(mode="json", exclude={"improved_data"}))
         return self
 
 

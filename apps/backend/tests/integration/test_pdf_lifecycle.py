@@ -438,9 +438,13 @@ async def test_detached_worker_failure_is_logged_server_side(
     assert pdf_module._active_renders == 0
 
 
-async def test_non_timeout_page_close_failure_retires_browser(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_non_timeout_page_close_failure_retires_browser(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     release = asyncio.Event()
     closing = asyncio.Event()
+    stopped = asyncio.Event()
 
     class BrokenPage(ControlledPage):
         async def close(self) -> None:
@@ -451,15 +455,19 @@ async def test_non_timeout_page_close_failure_retires_browser(monkeypatch: pytes
             closing.set()
             await release.wait()
             self.connected = False
+            stopped.set()
 
     browser = SlowBrowser(BrokenPage)
     monkeypatch.setattr(pdf_module, "_browser", browser)
     monkeypatch.setattr(pdf_module, "_PDF_MAX_CONCURRENCY", 1)
     try:
-        with pytest.raises(pdf_module.PDFRenderError):
-            await pdf_module.render_resume_pdf("data:text/html,close-error")
+        with caplog.at_level(logging.ERROR, logger="app.pdf"):
+            result = await pdf_module.render_resume_pdf("data:text/html,close-error")
+        assert result == b"%PDF-1.4 synthetic"
+        assert "synthetic page close failure" in caplog.text
         assert pdf_module._browser is None
         assert pdf_module._active_renders == 1
+        await asyncio.wait_for(closing.wait(), timeout=1)
         with pytest.raises(pdf_module.PDFRenderOverloadedError):
             await pdf_module.render_resume_pdf("data:text/html,no-capacity")
     finally:
@@ -468,6 +476,83 @@ async def test_non_timeout_page_close_failure_retires_browser(monkeypatch: pytes
             if pdf_module._active_renders == 0:
                 break
             await asyncio.sleep(0.01)
+    assert stopped.is_set() and pdf_module._active_renders == 0
+
+
+@pytest.mark.parametrize("render_failed", [False, True])
+async def test_cancellation_during_page_close_keeps_browser_cleanup_owned(
+    monkeypatch: pytest.MonkeyPatch,
+    render_failed: bool,
+) -> None:
+    """Cancel at page.close, after render settlement, without abandoning Chromium."""
+    page_closing = asyncio.Event()
+    page_close_cancelled = asyncio.Event()
+    browser_closing = asyncio.Event()
+    release_browser = asyncio.Event()
+    driver_stopping = asyncio.Event()
+    release_driver = asyncio.Event()
+    driver_stopped = asyncio.Event()
+
+    class InterruptedPage(ControlledPage):
+        async def close(self) -> None:
+            page_closing.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                page_close_cancelled.set()
+                raise
+
+    class SlowBrowser(ControlledBrowser):
+        async def close(self) -> None:
+            browser_closing.set()
+            await release_browser.wait()
+            self.connected = False
+
+    class SlowPlaywright:
+        async def stop(self) -> None:
+            driver_stopping.set()
+            await release_driver.wait()
+            driver_stopped.set()
+
+    page = InterruptedPage(
+        failure=PlaywrightError("synthetic render failure") if render_failed else None
+    )
+    browser = SlowBrowser(lambda: page)
+    monkeypatch.setattr(pdf_module, "_browser", browser)
+    monkeypatch.setattr(pdf_module, "_playwright", SlowPlaywright())
+    monkeypatch.setattr(pdf_module, "_PDF_MAX_CONCURRENCY", 1)
+    task = asyncio.create_task(pdf_module.render_resume_pdf("data:text/html,cancel-close"))
+    try:
+        await asyncio.wait_for(page_closing.wait(), timeout=1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=1)
+
+        assert page_close_cancelled.is_set()
+        assert pdf_module._browser is None
+        assert pdf_module._playwright is None
+        assert pdf_module._active_renders == 1
+        await asyncio.wait_for(browser_closing.wait(), timeout=1)
+        with pytest.raises(pdf_module.PDFRenderOverloadedError):
+            await pdf_module.render_resume_pdf("data:text/html,browser-still-closing")
+
+        release_browser.set()
+        await asyncio.wait_for(driver_stopping.wait(), timeout=1)
+        assert not browser.is_connected()
+        assert not driver_stopped.is_set()
+        assert pdf_module._active_renders == 1
+        with pytest.raises(pdf_module.PDFRenderOverloadedError):
+            await pdf_module.render_resume_pdf("data:text/html,driver-still-stopping")
+    finally:
+        release_browser.set()
+        release_driver.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await asyncio.wait_for(
+            asyncio.gather(*pdf_module._background_owners), timeout=1
+        )
+    assert driver_stopped.is_set() and pdf_module._active_renders == 0
 
 
 async def test_cancelled_stale_browser_cleanup_keeps_owner(monkeypatch: pytest.MonkeyPatch) -> None:

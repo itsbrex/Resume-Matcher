@@ -35,6 +35,12 @@ continues to occupy its concurrency slot until its bounded worker exits.
 If page cleanup exceeds its reserve, the shared browser is retired and its
 teardown retains a slot; saturated follow-up requests receive the same immediate
 busy outcome until cleanup finishes, after which a healthy browser is created.
+Cancellation during page cleanup also retires the browser and propagates the
+cancellation; capacity remains owned until browser and Playwright teardown finish.
+An ordinary Playwright error while closing the page is logged and retires the
+browser, but does not discard an already-generated PDF or replace an earlier
+render failure. Exceeding the cleanup deadline still makes an otherwise successful
+export time out.
 
 ## Query Parameters
 

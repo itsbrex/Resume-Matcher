@@ -422,13 +422,23 @@ async def _render_with_browser(
                 "PDF page",
                 strict_timeout=True,
             )
-        except (_PDFDeadlineExceeded, PlaywrightError):
+        except asyncio.CancelledError:
+            # Cancellation can arrive during cleanup after rendering settled.
+            # Transfer browser ownership synchronously before propagating it.
+            _retire_shared_browser(browser)
+            raise
+        except _PDFDeadlineExceeded:
             _retire_shared_browser(browser)
             if render_error is None:
                 raise
             logger.exception(
                 "PDF page cleanup exceeded its reserve after render failure"
             )
+        except PlaywrightError:
+            # A completed PDF remains usable when only page disposal fails.
+            # Retire the browser while preserving the original render outcome.
+            _retire_shared_browser(browser)
+            logger.exception("Failed to close PDF page; retiring its browser")
 
 
 def _run_in_new_loop(coro: Awaitable[bytes]) -> bytes:

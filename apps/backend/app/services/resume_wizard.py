@@ -6,7 +6,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError, field_validator
 
 from app.config_cache import get_content_language
 from app.llm import _scrub_secrets, complete_json
@@ -44,7 +44,7 @@ _VALID_SECTIONS = {
 }
 
 class _ResumeWizardAIEnvelope(BaseModel):
-    """Complete model response required before a wizard turn may advance."""
+    """Require resume data; omitted or null guidance uses safe defaults."""
 
     model_config = ConfigDict(strict=True)
 
@@ -52,6 +52,16 @@ class _ResumeWizardAIEnvelope(BaseModel):
     next_question: dict[str, Any] | None = None
     inferred_skills: list[str] = Field(default_factory=list)
     is_complete: StrictBool = False
+
+    @field_validator("inferred_skills", mode="before")
+    @classmethod
+    def _default_null_skills(cls, value: Any) -> Any:
+        return [] if value is None else value
+
+    @field_validator("is_complete", mode="before")
+    @classmethod
+    def _default_null_completion(cls, value: Any) -> Any:
+        return False if value is None else value
 
 # The keyword ("my name", "name") may be lower- or upper-cased, but the captured
 # name must start uppercase — so we case the keyword explicitly with [Mm]/[Nn]

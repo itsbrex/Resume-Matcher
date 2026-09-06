@@ -301,11 +301,23 @@ async def test_ai_turn_missing_next_question_falls_back_to_gap() -> None:
     assert result.current_question.section == "education"
 
 
-async def test_ai_turn_defaults_optional_envelope_fields() -> None:
-    """A useful resume update survives omitted model hints."""
+@pytest.mark.parametrize(
+    "guidance",
+    [
+        {},
+        {"inferred_skills": None},
+        {"is_complete": None},
+        {"next_question": None, "inferred_skills": None, "is_complete": None},
+    ],
+)
+async def test_ai_turn_defaults_optional_envelope_fields(
+    guidance: dict[str, object],
+) -> None:
+    """A useful resume update survives omitted or null model hints."""
     state = _state_on_section("workExperience")
     minimal_result = {
         "resume_data": _AI_EXPERIENCE_RESULT["resume_data"],
+        **guidance,
     }
     with patch(
         "app.services.resume_wizard.complete_json",
@@ -318,6 +330,8 @@ async def test_ai_turn_defaults_optional_envelope_fields() -> None:
     assert result.current_question.section == "education"
     assert result.inferred_skills == []
     assert result.is_complete is False
+    assert result.asked_count == state.asked_count + 1
+    assert result.history[-1].answer == "engineer at Acme"
 
 
 @pytest.mark.parametrize(

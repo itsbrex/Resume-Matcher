@@ -313,10 +313,6 @@ async def generate_enhancements(request: EnhanceRequest) -> EnhancementPreview:
                 status_code=422,
                 detail="The AI returned an unreadable response. Please try again or switch models.",
             )
-        except AIOperationDeadlineExceeded:
-            raise
-        except (AIOperationDeadlineExceeded, PromptSizeError):
-            raise
         except Exception as e:
             logger.error("Failed to re-analyze resume: %s", e)
             raise HTTPException(
@@ -397,6 +393,8 @@ async def generate_enhancements(request: EnhanceRequest) -> EnhancementPreview:
                     enhanced_description=additional_bullets,  # These are NEW bullets to add
                 )
             )
+        except (AIOperationDeadlineExceeded, PromptSizeError):
+            raise
         except Exception as e:
             logger.warning("Failed to enhance item %s: %s", item_id, e, exc_info=e)
             errors.append(

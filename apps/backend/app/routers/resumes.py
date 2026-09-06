@@ -15,8 +15,12 @@ from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import ValidationError
 
-from app.ai_limits import MAX_JOB_CHARACTERS, require_source_size
-from app.ai_budget import AIOperationRoute, remaining_timeout
+from app.ai_limits import MAX_JOB_CHARACTERS, PromptSizeError, require_source_size
+from app.ai_budget import (
+    AIOperationDeadlineExceeded,
+    AIOperationRoute,
+    remaining_timeout,
+)
 from app.config_cache import get_content_language, load_config as _load_config
 from app.database import DatabaseBusyError, ProcessingFinishOutcome, ResumeNotFoundError, db
 from app.pdf import render_resume_pdf, PDFRenderError
@@ -624,6 +628,10 @@ async def _generate_auxiliary_messages(
     title = None
     interview_prep = None
     warnings: list[str] = []
+    # Finish optional work before the operation deadline so successful outputs
+    # can still be persisted if one provider call stalls. The remaining slice is
+    # reserved for the resume/improvement transaction.
+    generation_timeout = max(0.001, remaining_timeout() * 0.8)
     generation_tasks: list[Awaitable[str | InterviewPrepData]] = []
     task_labels: list[str] = []
 
@@ -647,11 +655,6 @@ async def _generate_auxiliary_messages(
         )
         task_labels.append("interview_prep")
 
-    # Finish optional work before the operation deadline so successful outputs
-    # can still be persisted if one provider call stalls. The remaining slice is
-    # reserved for the resume/improvement transaction.
-    generation_timeout = max(0.001, remaining_timeout() * 0.8)
-
     async def bounded_generation(
         generation: Awaitable[str | InterviewPrepData],
     ) -> str | InterviewPrepData:
@@ -662,6 +665,8 @@ async def _generate_auxiliary_messages(
         return_exceptions=True,
     )
     for label, result in zip(task_labels, results):
+        if isinstance(result, (AIOperationDeadlineExceeded, PromptSizeError)):
+            raise result
         if isinstance(result, Exception):
             logger.warning(
                 "%s generation failed: %s",
@@ -831,7 +836,7 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
             status_code=504,
             detail="Document conversion timed out. Please try a simpler document.",
         ) from e
-    except DatabaseBusyError:
+    except (DatabaseBusyError, PromptSizeError):
         raise
     except Exception as e:
         logger.exception("Document parsing failed")
@@ -880,7 +885,7 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
         # Try to parse to structured JSON (optional, may fail if LLM not configured)
         try:
             processed_data = await parse_resume_to_json(markdown_content)
-        except DatabaseBusyError:
+        except (DatabaseBusyError, AIOperationDeadlineExceeded, PromptSizeError):
             raise
         except Exception as e:
             logger.warning(f"Resume parsing to JSON failed for {file.filename}: {e}")
@@ -920,7 +925,7 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
             processing_status=resume["processing_status"],
             is_master=resume.get("is_master", False),
         )
-    except asyncio.CancelledError:
+    except (asyncio.CancelledError, AIOperationDeadlineExceeded, PromptSizeError):
         await _finish_cancelled_processing(resume["resume_id"], processing_token)
         raise
 
@@ -1061,7 +1066,7 @@ async def improve_resume_preview_endpoint(
                 "job description or a simpler prompt."
             ),
         )
-    except DatabaseBusyError:
+    except (DatabaseBusyError, PromptSizeError):
         raise
     except Exception as e:
         _raise_improve_error("preview", progress["stage"], e, detail)
@@ -1150,6 +1155,8 @@ async def _improve_preview_flow(
                 response_warnings.append(
                     f"{len(rejected_targets)} unsupported skill target(s) rejected"
                 )
+        except (AIOperationDeadlineExceeded, PromptSizeError):
+            raise
         except Exception as e:
             logger.warning("Skill target planning failed, continuing without it: %s", e)
             response_warnings.append("Skill target planning failed")
@@ -1254,6 +1261,8 @@ async def _improve_preview_flow(
                 refinement_result.passes_completed,
                 len(refinement_result.ai_phrases_removed),
             )
+    except (AIOperationDeadlineExceeded, PromptSizeError):
+        raise
     except Exception as e:
         logger.warning("Refinement failed, using unrefined result: %s", e)
         if refinement_attempted:
@@ -1492,7 +1501,7 @@ async def improve_resume_confirm_endpoint(
         ) from e
     except HTTPException:
         raise
-    except DatabaseBusyError:
+    except (DatabaseBusyError, PromptSizeError):
         raise
     except Exception as e:
         _raise_improve_error("confirm", stage, e, detail)
@@ -1644,7 +1653,7 @@ async def improve_resume_endpoint(
                     refinement_result.passes_completed,
                     len(refinement_result.ai_phrases_removed),
                 )
-        except DatabaseBusyError:
+        except (DatabaseBusyError, AIOperationDeadlineExceeded, PromptSizeError):
             raise
         except Exception as e:
             logger.warning("Refinement failed, using unrefined result: %s", e)
@@ -1771,8 +1780,7 @@ async def improve_resume_endpoint(
             ),
         )
 
-    except DatabaseBusyError:
-
+    except (DatabaseBusyError, AIOperationDeadlineExceeded, PromptSizeError):
         raise
 
     except Exception as e:
@@ -1982,7 +1990,7 @@ async def retry_processing(resume_id: str) -> ResumeUploadResponse:
     try:
         try:
             processed_data = await parse_resume_to_json(markdown_content)
-        except DatabaseBusyError:
+        except (DatabaseBusyError, AIOperationDeadlineExceeded, PromptSizeError):
             raise
         except Exception as e:
             logger.warning(f"Retry processing failed for resume {resume_id}: {e}")
@@ -2020,7 +2028,7 @@ async def retry_processing(resume_id: str) -> ResumeUploadResponse:
                 processing_status="ready",
                 is_master=resume.get("is_master", False),
             )
-    except asyncio.CancelledError:
+    except (asyncio.CancelledError, AIOperationDeadlineExceeded, PromptSizeError):
         await _finish_cancelled_processing(resume_id, processing_token)
         raise
 
@@ -2121,7 +2129,7 @@ async def generate_cover_letter_endpoint(resume_id: str) -> GenerateContentRespo
         cover_letter_content = await generate_cover_letter(
             resume_data, job["content"], language
         )
-    except DatabaseBusyError:
+    except (DatabaseBusyError, AIOperationDeadlineExceeded, PromptSizeError):
         raise
     except Exception as e:
         logger.error(f"Cover letter generation failed: {e}")
@@ -2195,7 +2203,7 @@ async def generate_outreach_endpoint(resume_id: str) -> GenerateContentResponse:
         outreach_content = await generate_outreach_message(
             resume_data, job["content"], language
         )
-    except DatabaseBusyError:
+    except (DatabaseBusyError, AIOperationDeadlineExceeded, PromptSizeError):
         raise
     except Exception as e:
         logger.error(f"Outreach message generation failed: {e}")
@@ -2263,7 +2271,7 @@ async def generate_interview_prep_endpoint(
             job["content"],
             language,
         )
-    except DatabaseBusyError:
+    except (DatabaseBusyError, AIOperationDeadlineExceeded, PromptSizeError):
         raise
     except Exception as e:
         logger.exception("Interview preparation generation failed: %s", e)

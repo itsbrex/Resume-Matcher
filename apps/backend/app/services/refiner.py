@@ -14,6 +14,8 @@ import re
 from functools import lru_cache
 from typing import Any
 
+from app.ai_budget import AIOperationDeadlineExceeded
+from app.ai_limits import PromptSizeError
 from app.llm import complete_json
 from app.prompts.refinement import (
     AI_PHRASE_BLACKLIST,
@@ -137,6 +139,8 @@ async def refine_resume(
                 current = finalize_ai_resume(initial_tailored, candidate)
                 if current != before:
                     passes += 1
+            except (AIOperationDeadlineExceeded, PromptSizeError):
+                raise
             except Exception as e:
                 logger.warning("Keyword injection failed: %s", e)
                 current = before
@@ -636,6 +640,8 @@ async def inject_keywords(
         # uses for dates, skills, personalInfo and custom sections.
         return _preserve_description_styles(tailored, result)
 
+    except (AIOperationDeadlineExceeded, PromptSizeError):
+        raise
     except Exception as e:
         logger.warning("Keyword injection failed: %s", e)
         return tailored

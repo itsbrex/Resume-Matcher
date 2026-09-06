@@ -513,3 +513,88 @@ async def test_deadline_during_claim_retires_committed_owner_before_returning(
     records = await isolated_db.list_resumes()
     assert len(records) == 1
     assert records[0]["processing_status"] == "failed"
+
+
+@pytest.mark.parametrize("failure,expected", [("deadline", 504), ("prompt", 422)])
+@pytest.mark.parametrize("boundary", ["enhance", "preview", "direct", "cover-letter", "outreach", "interview-prep"])
+async def test_dedicated_ai_failures_reach_api_boundary(
+    monkeypatch: pytest.MonkeyPatch, sample_resume: dict[str, Any],
+    failure: str, expected: int, boundary: str,
+) -> None:
+    from app.ai_budget import AIOperationDeadlineExceeded
+    from app.ai_limits import PromptSizeError
+
+    error = AIOperationDeadlineExceeded("expired") if failure == "deadline" else PromptSizeError("AI prompt exceeds the 512000-character limit")
+    monkeypatch.setattr(resumes.db, "get_resume", AsyncMock(return_value={"processed_data": sample_resume, "content": "Synthetic source", "parent_id": "master"}))
+    monkeypatch.setattr(resumes.db, "get_job", AsyncMock(return_value={"content": "Python engineer"}))
+    monkeypatch.setattr(resumes.db, "get_improvement_by_tailored_resume", AsyncMock(return_value={"job_id": "j"}))
+    if boundary == "enhance":
+        monkeypatch.setattr(enrichment, "complete_json", AsyncMock(side_effect=error))
+        path = "/enrichment/enhance"
+        payload = {"resume_id": "r", "answers": [{"question_id": "q", "item_id": "exp_0", "answer": "Built Python tools"}]}
+    elif boundary == "preview":
+        monkeypatch.setattr(resumes, "_improve_preview_flow", AsyncMock(side_effect=error))
+        path, payload = "/resumes/improve/preview", {"resume_id": "r", "job_id": "j"}
+    elif boundary == "direct":
+        monkeypatch.setattr(resumes, "extract_job_keywords", AsyncMock(side_effect=error))
+        path, payload = "/resumes/improve", {"resume_id": "r", "job_id": "j"}
+    else:
+        service = {"cover-letter": "generate_cover_letter", "outreach": "generate_outreach_message", "interview-prep": "generate_interview_prep"}[boundary]
+        monkeypatch.setattr(resumes, service, AsyncMock(side_effect=error))
+        path, payload = f"/resumes/r/generate-{boundary}", {}
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(f"/api/v1{path}", json=payload)
+    assert response.status_code == expected, response.text
+    if failure == "prompt":
+        assert response.json()["detail"].startswith("AI prompt exceeds")
+
+
+@pytest.mark.parametrize("retry", [False, True])
+@pytest.mark.parametrize("failure,expected", [("deadline", 504), ("prompt", 422)])
+async def test_explicit_parse_boundary_failure_retires_owned_attempt(
+    monkeypatch: pytest.MonkeyPatch, isolated_db: Any,
+    retry: bool, failure: str, expected: int,
+) -> None:
+    from app.ai_budget import AIOperationDeadlineExceeded
+    from app.ai_limits import PromptSizeError
+
+    error = AIOperationDeadlineExceeded("expired") if failure == "deadline" else PromptSizeError("AI prompt exceeds the 512000-character limit")
+    monkeypatch.setattr(resumes, "parse_document", AsyncMock(return_value="Synthetic resume"))
+    monkeypatch.setattr(resumes, "parse_resume_to_json", AsyncMock(side_effect=error))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        if retry:
+            record = await isolated_db.create_resume_atomic_master(content="Synthetic resume", content_type="md", processing_status="failed")
+            response = await client.post(f"/api/v1/resumes/{record['resume_id']}/retry-processing")
+        else:
+            response = await client.post("/api/v1/resumes/upload", files={"file": ("synthetic.pdf", b"%PDF-1.4 synthetic", "application/pdf")})
+    assert response.status_code == expected, response.text
+    records = await isolated_db.list_resumes()
+    assert len(records) == 1 and records[0]["processing_status"] == "failed"
+    assert records[0]["processed_data"] is None
+
+
+@pytest.mark.parametrize("failure", ["deadline", "prompt"])
+async def test_auxiliary_boundary_failure_is_not_an_optional_item_error(
+    monkeypatch: pytest.MonkeyPatch, failure: str,
+) -> None:
+    from app.ai_budget import AIOperationDeadlineExceeded
+    from app.ai_limits import PromptSizeError
+
+    kind = AIOperationDeadlineExceeded if failure == "deadline" else PromptSizeError
+    monkeypatch.setattr(resumes, "generate_resume_title", AsyncMock(side_effect=kind("synthetic boundary")))
+    with pytest.raises(kind):
+        await resumes._generate_auxiliary_messages({}, "Engineer", "en", False, False, False)
+
+
+@pytest.mark.parametrize("failure", ["deadline", "prompt"])
+async def test_keyword_writer_preserves_dedicated_operation_failures(
+    monkeypatch: pytest.MonkeyPatch, sample_resume: dict[str, Any], failure: str,
+) -> None:
+    from app.ai_budget import AIOperationDeadlineExceeded
+    from app.ai_limits import PromptSizeError
+    from app.services import refiner
+
+    kind = AIOperationDeadlineExceeded if failure == "deadline" else PromptSizeError
+    monkeypatch.setattr(refiner, "complete_json", AsyncMock(side_effect=kind("synthetic boundary")))
+    with pytest.raises(kind):
+        await refiner.inject_keywords(sample_resume, ["Kubernetes"], sample_resume, "Python engineer")

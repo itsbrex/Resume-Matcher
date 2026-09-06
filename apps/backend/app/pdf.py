@@ -8,6 +8,7 @@ import os
 import sys
 import threading
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, NoReturn, Optional, TypeVar
 
@@ -121,6 +122,30 @@ _subprocess_supported = True
 _admission_lock = threading.Lock()
 _active_renders = 0
 _background_owners: set[asyncio.Task[None]] = set()
+
+
+@dataclass
+class _BrowserUsers:
+    """Track only render scopes currently using one browser generation."""
+
+    active: int = 0
+    drained: asyncio.Event = field(default_factory=asyncio.Event)
+
+
+_browser_users: dict[Browser, _BrowserUsers] = {}
+
+
+def _acquire_browser_user(browser: Browser) -> _BrowserUsers:
+    users = _browser_users.setdefault(browser, _BrowserUsers())
+    users.active += 1
+    return users
+
+
+def _release_browser_user(browser: Browser, users: _BrowserUsers) -> None:
+    users.active -= 1
+    if users.active == 0:
+        _browser_users.pop(browser)
+        users.drained.set()
 
 
 def _browser_is_connected(browser: Browser | None) -> bool:
@@ -562,26 +587,33 @@ def _loop_supports_subprocess() -> bool:
 
 
 async def close_pdf_renderer() -> None:
-    """Close the Playwright browser instance."""
-    global _playwright, _browser
+    """Retire cached ownership and give active teardown a bounded drain window."""
+    global _playwright
     await _init_lock.acquire()
     try:
-        browser = _browser
-        playwright = _playwright
-        _browser = None
-        _playwright = None
-        if browser is not None:
-            try:
-                await browser.close()
-            except PlaywrightError:
-                logger.exception("Failed to close PDF browser during shutdown")
-        if playwright is not None:
+        if _browser is not None:
+            _retire_shared_browser(_browser)
+        elif _playwright is not None:
+            playwright = _playwright
+            _playwright = None
             try:
                 await playwright.stop()
             except PlaywrightError:
                 logger.exception("Failed to stop Playwright during shutdown")
     finally:
         _init_lock.release()
+
+    owners = set(_background_owners)
+    if owners:
+        _, pending = await asyncio.wait(
+            owners, timeout=_PDF_CLEANUP_RESERVE_SECONDS
+        )
+        if pending:
+            logger.warning(
+                "PDF shutdown cleanup continues for %d owned resources", len(pending)
+            )
+        # Do not cancel pending owners: they retain capacity until the driver
+        # or fallback worker has actually stopped.
 
 
 def _acquire_render_slot() -> None:
@@ -616,27 +648,45 @@ async def _close_retired_browser(
     browser: Browser,
     playwright: Playwright | None,
     release_slot: bool = True,
+    *,
+    users_drained: asyncio.Event | None = None,
 ) -> None:
-    """Own one admission slot until a retired browser is actually torn down."""
+    """Drain the retired generation, then own capacity through driver teardown."""
     try:
-        try:
-            await browser.close()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("Failed to close retired PDF browser")
-        if playwright is not None:
-            try:
-                await playwright.stop()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Failed to stop retired PDF Playwright instance")
-        if _browser_is_connected(browser):
-            logger.error(
-                "Retired PDF browser is still connected; retaining renderer capacity"
-            )
-            await asyncio.Event().wait()
+        if users_drained is not None:
+            await users_drained.wait()
+        browser_closed = False
+        driver_stopped = playwright is None
+        cleanup_attempt = 0
+        while not (browser_closed and driver_stopped):
+            if not browser_closed:
+                try:
+                    await browser.close()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    if cleanup_attempt == 0:
+                        logger.exception("Failed to close retired PDF browser")
+                browser_closed = not _browser_is_connected(browser)
+            if not driver_stopped:
+                assert playwright is not None
+                try:
+                    await playwright.stop()
+                    driver_stopped = True
+                    # Owned Playwright.stop waits for its driver to exit. A
+                    # Browser object can retain a stale connected flag after
+                    # that transport closes, although Chromium was reaped.
+                    browser_closed = True
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    if cleanup_attempt == 0:
+                        logger.exception("Failed to stop retired PDF Playwright instance")
+            if not (browser_closed and driver_stopped):
+                # Keep both admission and background ownership on a real
+                # teardown failure; retry instead of an unsignallable wait.
+                cleanup_attempt += 1
+                await asyncio.sleep(0.1)
     finally:
         if release_slot:
             _release_render_slot()
@@ -653,7 +703,15 @@ def _retire_shared_browser(browser: Browser, *, retain_slot: bool = True) -> asy
     _playwright = None
     if retain_slot:
         _retain_render_slot_for_cleanup()
-    owner = asyncio.create_task(_close_retired_browser(browser, playwright, retain_slot))
+    users = _browser_users.get(browser)
+    owner = asyncio.create_task(
+        _close_retired_browser(
+            browser,
+            playwright,
+            retain_slot,
+            users_drained=users.drained if users is not None else None,
+        )
+    )
     _background_owners.add(owner)
     owner.add_done_callback(_background_owners.discard)
     return owner
@@ -690,15 +748,19 @@ async def _render_on_shared_browser(
     browser = await _replace_disconnected_browser(work_deadline, total_deadline)
     for attempt in range(2):
         try:
-            return await _render_with_browser(
-                browser,
-                url,
-                selector,
-                pdf_format,
-                pdf_margins,
-                work_deadline,
-                total_deadline,
-            )
+            users = _acquire_browser_user(browser)
+            try:
+                return await _render_with_browser(
+                    browser,
+                    url,
+                    selector,
+                    pdf_format,
+                    pdf_margins,
+                    work_deadline,
+                    total_deadline,
+                )
+            finally:
+                _release_browser_user(browser, users)
         except PlaywrightError:
             if attempt == 0 and not _browser_is_connected(browser):
                 browser = await _replace_disconnected_browser(

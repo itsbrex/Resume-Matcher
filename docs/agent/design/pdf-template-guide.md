@@ -42,6 +42,18 @@ browser, but does not discard an already-generated PDF or replace an earlier
 render failure. Exceeding the cleanup deadline still makes an otherwise successful
 export time out.
 
+Retirement immediately removes that browser from the cache, so new exports cannot
+join it. Existing exports keep using their own pages until their render and page
+cleanup scopes finish; only then does the retirement owner close the shared
+browser. Concurrent cleanup failures therefore retire that generation only once
+without aborting or replaying healthy exports.
+
+A successful stop of the owned Playwright driver is a teardown acknowledgement,
+even if its Browser object retains a stale `is_connected()` flag. If driver
+shutdown fails, cleanup keeps its admission slot and retries. Application shutdown
+waits for tracked cleanup owners within the cleanup reserve and logs any that
+remain pending; it does not cancel them or release their capacity prematurely.
+
 ## Query Parameters
 
 | Param | Default | Range |

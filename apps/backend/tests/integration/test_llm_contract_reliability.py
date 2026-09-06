@@ -177,12 +177,21 @@ def test_enrichment_uses_valid_legacy_field_when_canonical_field_is_empty() -> N
     assert result["additional_bullets"] == ["Improved factual bullet"]
 
 
-async def test_prose_prefixed_top_level_array_gets_corrective_retry(
+@pytest.mark.parametrize(
+    "array_content",
+    [
+        'Here is the result: [{"changes": []}]',
+        '```json\n[{"changes": []}]\n```',
+    ],
+    ids=["prose-prefixed", "fenced"],
+)
+async def test_top_level_array_gets_corrective_retry(
     monkeypatch: pytest.MonkeyPatch,
+    array_content: str,
 ) -> None:
     router = AsyncMock()
     array_response = _response([{"changes": []}])
-    array_response.choices[0].message.content = 'Here is the result: [{"changes": []}]'
+    array_response.choices[0].message.content = array_content
     router.acompletion.side_effect = [array_response, _response({"changes": []})]
     monkeypatch.setattr(llm, "get_router", lambda _config=None: (router, CONFIG))
     monkeypatch.setattr(llm, "_supports_json_mode", lambda _model: False)
@@ -192,6 +201,25 @@ async def test_prose_prefixed_top_level_array_gets_corrective_retry(
     assert router.acompletion.await_count == 2
     retry_messages = router.acompletion.await_args_list[1].kwargs["messages"]
     assert "Output ONLY a valid JSON object" in retry_messages[-1]["content"]
+
+
+async def test_bracketed_prose_before_object_is_salvaged_without_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router = AsyncMock()
+    response = _response({"changes": []})
+    response.choices[0].message.content = (
+        "Notes [schema v2] and citation [1] follow.\n"
+        '{"changes": []}'
+    )
+    router.acompletion.return_value = response
+    monkeypatch.setattr(llm, "get_router", lambda _config=None: (router, CONFIG))
+    monkeypatch.setattr(llm, "_supports_json_mode", lambda _model: False)
+
+    result = await llm.complete_json("synthetic", retries=1, schema_type="diff")
+
+    assert result == {"changes": []}
+    assert router.acompletion.await_count == 1
 
 
 async def test_validator_must_return_an_object(

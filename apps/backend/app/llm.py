@@ -1358,6 +1358,23 @@ def _strip_thinking_tags(content: str) -> str:
     return stripped.strip()
 
 
+def _object_starts_inside_array(content: str, object_start: int) -> bool:
+    """Return whether an earlier bracket opens an array around the object."""
+    array_start = content.find("[")
+    while 0 <= array_start < object_start:
+        candidate = content[array_start:]
+        try:
+            value, end = json.JSONDecoder().raw_decode(candidate)
+        except json.JSONDecodeError:
+            # An unmatched prose/citation bracket is not a JSON array boundary.
+            pass
+        else:
+            if isinstance(value, list) and array_start + end > object_start:
+                return True
+        array_start = content.find("[", array_start + 1)
+    return False
+
+
 def _extract_json(content: str, _depth: int = 0) -> str:
     """Extract JSON from LLM response, handling various formats.
 
@@ -1434,8 +1451,9 @@ def _extract_json(content: str, _depth: int = 0) -> str:
 
     # Try to find JSON object in the content (only if not already at start)
     start_idx = content.find("{")
-    array_idx = content.find("[")
-    if array_idx >= 0 and (start_idx < 0 or array_idx < start_idx):
+    if start_idx < 0 and "[" in content:
+        raise ValueError("Expected a JSON object, received a top-level array")
+    if start_idx >= 0 and _object_starts_inside_array(content, start_idx):
         raise ValueError("Expected a JSON object, received a top-level array")
     if start_idx > 0:
         # Only recurse if { is found after position 0 to avoid infinite recursion

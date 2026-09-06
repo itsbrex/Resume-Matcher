@@ -43,7 +43,7 @@ apps/backend/app/db_engine.py,Backend runtime or tooling,#948;#949;#950;#951;#95
 apps/backend/app/llm.py,Backend runtime or tooling,#942;#943;#944;#945;#969;#973;#974;#975
 apps/backend/app/main.py,Backend runtime or tooling,#955;#956;#957;#958;#973;#974
 apps/backend/app/models.py,Backend runtime or tooling,#948;#949;#950;#951;#952;#953;#954;#955;#956;#957;#958
-apps/backend/app/pdf.py,Backend runtime or tooling,#960;#961;#962
+apps/backend/app/pdf.py,Backend runtime or tooling,#960;#961;#962;#973;#974
 apps/backend/app/preview.py,Backend runtime or tooling,#948;#949;#950;#951
 apps/backend/app/prompts/__init__.py,AI prompt,
 apps/backend/app/prompts/enrichment.py,AI prompt,
@@ -108,7 +108,7 @@ apps/backend/tests/evals/__init__.py,Backend verification,
 apps/backend/tests/evals/conftest.py,Backend verification,#959;#963;#971
 apps/backend/tests/evals/golden/__init__.py,Backend verification,
 apps/backend/tests/evals/golden/cases.py,Backend verification,#959;#963;#971
-apps/backend/tests/evals/scorers.py,Backend verification,#959;#963;#971
+apps/backend/tests/evals/scorers.py,Backend verification,#959;#963;#971;#973;#974
 apps/backend/tests/evals/test_scorers.py,Backend verification,#959;#963;#971;#973;#974
 apps/backend/tests/evals/test_tailoring_eval.py,Backend verification,#959;#963;#971
 apps/backend/tests/integration/__init__.py,Backend verification,
@@ -131,6 +131,7 @@ apps/backend/tests/integration/test_pdf_grid_geometry.py,Backend verification,#9
 apps/backend/tests/integration/test_pdf_lifecycle.py,Backend verification,#960;#961;#962
 apps/backend/tests/integration/test_pdf_multilingual_flow.py,Backend verification,#973;#974
 apps/backend/tests/integration/test_pdf_render.py,Backend verification,
+apps/backend/tests/integration/test_pdf_retired_generations.py,Backend verification,#960;#961;#962;#973;#974
 apps/backend/tests/integration/test_pipeline_e2e.py,Backend verification,#952;#953;#954;#973;#974
 apps/backend/tests/integration/test_processing_busy_retirement.py,Backend verification,#952;#954;#955;#956;#957;#958;#973;#974
 apps/backend/tests/integration/test_processing_cleanup_deadlines.py,Backend verification,#973;#974
@@ -172,7 +173,7 @@ apps/backend/tests/unit/test_parser.py,Backend verification,
 apps/backend/tests/unit/test_preview_ttl_settings.py,Backend verification,#948;#949;#950;#951
 apps/backend/tests/unit/test_processing_ownership.py,Backend verification,#952;#953;#954
 apps/backend/tests/unit/test_prompt_guardrails.py,Backend verification,#940;#941;#947;#970
-apps/backend/tests/unit/test_refiner.py,Backend verification,#959;#963;#971
+apps/backend/tests/unit/test_refiner.py,Backend verification,#959;#963;#971;#973;#974
 apps/backend/tests/unit/test_resume_diff.py,Backend verification,
 apps/backend/tests/unit/test_resume_wizard_service.py,Backend verification,#938;#946;#967;#968;#973;#974
 apps/backend/tests/unit/test_sampling_capabilities.py,Backend verification,#975
@@ -457,7 +458,7 @@ docs/agent/architecture/reliability-file-inventory.csv,Documentation,#973;#974
 docs/agent/architecture/reliability-map.md,Documentation,#973;#974
 docs/agent/architecture/storage-transactions.md,Documentation,#955;#956;#957;#958;#973;#974
 docs/agent/coding-standards.md,Documentation,
-docs/agent/design/pdf-template-guide.md,Documentation,#960;#961;#962
+docs/agent/design/pdf-template-guide.md,Documentation,#960;#961;#962;#973;#974
 docs/agent/design/print-pdf-design-spec.md,Documentation,
 docs/agent/design/resume-template-design-spec.md,Documentation,
 docs/agent/design/template-system.md,Documentation,

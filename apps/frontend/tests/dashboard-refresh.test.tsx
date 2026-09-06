@@ -77,6 +77,12 @@ function status(
   };
 }
 
+async function exhaustProcessingPolls(): Promise<void> {
+  for (let attempt = 0; attempt < 12; attempt++) {
+    await act(async () => vi.advanceTimersByTimeAsync(30000));
+  }
+}
+
 describe('dashboard refresh ownership', () => {
   beforeEach(() => {
     localStorage.clear();
@@ -248,5 +254,77 @@ describe('dashboard refresh ownership', () => {
     expect(screen.getByText('fresh-card')).toBeInTheDocument();
     await act(async () => old.resolve([row('stale-card')]));
     expect(screen.queryByText('stale-card')).not.toBeInTheDocument();
+  });
+
+  it.each(['processing', 'pending'] as const)(
+    'restarts a capped observation window after retry returns %s',
+    async (processing_status) => {
+      vi.useFakeTimers();
+      const retry = deferred<unknown>();
+      api.list.mockResolvedValue([row('master', true)]);
+      api.get.mockResolvedValue(status('processing'));
+      api.retry.mockReturnValue(retry.promise);
+      render(<Dashboard />);
+      await act(async () => {});
+      await exhaustProcessingPolls();
+      expect(api.get).toHaveBeenCalledTimes(13);
+
+      fireEvent.click(screen.getAllByRole('button', { name: 'dashboard.retryProcessing' })[0]);
+      await act(async () => vi.advanceTimersByTimeAsync(30000));
+      expect(api.get).toHaveBeenCalledTimes(13);
+      await act(async () => retry.resolve({ processing_status }));
+      api.get.mockResolvedValue(status('ready'));
+      await act(async () => vi.advanceTimersByTimeAsync(2999));
+      expect(api.get).toHaveBeenCalledTimes(13);
+      await act(async () => vi.advanceTimersByTimeAsync(1));
+
+      expect(api.get).toHaveBeenCalledTimes(14);
+      expect(screen.getByText('dashboard.statusLine:dashboard.status.ready')).toBeInTheDocument();
+      await act(async () => vi.advanceTimersByTimeAsync(30000));
+      expect(api.get).toHaveBeenCalledTimes(14);
+    }
+  );
+
+  it('keeps a replacement master observation window when an old retry settles', async () => {
+    vi.useFakeTimers();
+    const retry = deferred<unknown>();
+    api.list.mockResolvedValue([row('old', true)]);
+    api.get.mockResolvedValue(status('processing'));
+    api.retry.mockReturnValue(retry.promise);
+    render(<Dashboard />);
+    await act(async () => {});
+    await exhaustProcessingPolls();
+    fireEvent.click(screen.getAllByRole('button', { name: 'dashboard.retryProcessing' })[0]);
+
+    api.list.mockResolvedValue([row('new', true)]);
+    fireEvent.focus(window);
+    await act(async () => {});
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(api.get.mock.calls.filter(([id]) => id === 'new')).toHaveLength(2);
+    await act(async () => retry.resolve({ processing_status: 'processing' }));
+    await act(async () => vi.advanceTimersByTimeAsync(6000));
+    expect(api.get.mock.calls.filter(([id]) => id === 'new')).toHaveLength(3);
+    await act(async () => vi.advanceTimersByTimeAsync(6000));
+
+    // The current window is on a 12-second delay, unaffected by the old retry.
+    expect(api.get.mock.calls.filter(([id]) => id === 'new')).toHaveLength(3);
+    expect(api.get.mock.calls.filter(([id]) => id === 'old')).toHaveLength(13);
+    expect(localStorage.getItem('master_resume_id')).toBe('new');
+  });
+
+  it('does not resume polling when a retry settles after unmount', async () => {
+    vi.useFakeTimers();
+    const retry = deferred<unknown>();
+    api.list.mockResolvedValue([row('master', true)]);
+    api.get.mockResolvedValue(status('processing'));
+    api.retry.mockReturnValue(retry.promise);
+    const view = render(<Dashboard />);
+    await act(async () => {});
+    await exhaustProcessingPolls();
+    fireEvent.click(screen.getAllByRole('button', { name: 'dashboard.retryProcessing' })[0]);
+    view.unmount();
+    await act(async () => retry.resolve({ processing_status: 'processing' }));
+    await act(async () => vi.advanceTimersByTimeAsync(30000));
+    expect(api.get).toHaveBeenCalledTimes(13);
   });
 });

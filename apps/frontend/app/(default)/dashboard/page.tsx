@@ -303,6 +303,7 @@ export default function DashboardPage() {
         result.processing_status === 'processing' ||
         result.processing_status === 'pending'
       ) {
+        pollAttemptsRef.current = 0;
         setProcessingStatus(result.processing_status);
       } else {
         setProcessingStatus('failed');
